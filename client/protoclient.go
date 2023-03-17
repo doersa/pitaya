@@ -23,8 +23,10 @@ package client
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"strings"
 	"time"
@@ -34,9 +36,9 @@ import (
 	"github.com/jhump/protoreflect/desc"
 	"github.com/jhump/protoreflect/dynamic"
 	"github.com/sirupsen/logrus"
-	"github.com/topfreegames/pitaya/conn/message"
-	"github.com/topfreegames/pitaya/logger"
-	"github.com/topfreegames/pitaya/protos"
+	"github.com/topfreegames/pitaya/v2/conn/message"
+	"github.com/topfreegames/pitaya/v2/logger"
+	"github.com/topfreegames/pitaya/v2/protos"
 )
 
 // Command struct. Save the input and output type and proto descriptor for each
@@ -143,6 +145,11 @@ func getOutputInputNames(command map[string]interface{}) (string, string, error)
 
 	out := command["output"]
 	outputDocsArr := out.([]interface{})
+	// we can have handlers that have no return specified.
+	if len(outputDocsArr) == 0 {
+		return inputName, "", nil
+	}
+
 	outputDocs, ok := outputDocsArr[0].(map[string]interface{})
 	if ok {
 		for k := range outputDocs {
@@ -210,7 +217,7 @@ func (pc *ProtoClient) getDescriptors(data string) error {
 		cmdInfo := v.(map[string]interface{})
 		in, out, err := getOutputInputNames(cmdInfo)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to get output and input names for '%s' handler: %w", k, err)
 		}
 
 		var command Command
@@ -249,17 +256,17 @@ func (pc *ProtoClient) getDescriptors(data string) error {
 
 	encodedNames, err := proto.Marshal(protname)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to encode proto names: %w", err)
 	}
 	_, err = pc.SendRequest(pc.descriptorsRoute, encodedNames)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to send proto descriptors request: %w", err)
 	}
 
 	response := <-pc.Client.IncomingMsgChan
 	descriptors := &protos.ProtoDescriptors{}
 	if err := proto.Unmarshal(response.Data, descriptors); err != nil {
-		return err
+		return fmt.Errorf("failed to unmarshal proto descriptors response: %w", err)
 	}
 
 	// get all proto types
@@ -267,7 +274,7 @@ func (pc *ProtoClient) getDescriptors(data string) error {
 	for i := range descriptors.Desc {
 		fileDescriptorProto, err := unpackDescriptor(descriptors.Desc[i])
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to unpack descriptor: %w", err)
 		}
 
 		descriptorArray = append(descriptorArray, fileDescriptorProto)
@@ -275,7 +282,7 @@ func (pc *ProtoClient) getDescriptors(data string) error {
 	}
 
 	if err = pc.buildProtosFromDescriptor(descriptorArray); err != nil {
-		return err
+		return fmt.Errorf("failed to build proto from descriptor: %w", err)
 	}
 
 	return nil
@@ -317,13 +324,17 @@ func NewWithDescriptor(descriptorsRoute string, docsRoute string, docslogLevel l
 func (pc *ProtoClient) LoadServerInfo(addr string) error {
 	pc.ready = false
 
-	if err := pc.Client.ConnectToTLS(addr, true); err != nil {
-		if err.Error() == "EOF" {
-			if err := pc.Client.ConnectTo(addr); err != nil {
-				return err
+	if err := pc.Client.ConnectToWS(addr, "", &tls.Config{
+		InsecureSkipVerify: true,
+	}); err != nil {
+		if err := pc.Client.ConnectToWS(addr, ""); err != nil {
+			if err := pc.Client.ConnectTo(addr, &tls.Config{
+				InsecureSkipVerify: true,
+			}); err != nil {
+				if err := pc.Client.ConnectTo(addr); err != nil {
+					return err
+				}
 			}
-		} else {
-			return err
 		}
 	}
 
@@ -336,11 +347,11 @@ func (pc *ProtoClient) LoadServerInfo(addr string) error {
 
 	docs := &protos.Doc{}
 	if err := proto.Unmarshal(response.Data, docs); err != nil {
-		return err
+		return fmt.Errorf("failed to unmarshal docs route response: %w", err)
 	}
 
 	if err := pc.getDescriptors(docs.Doc); err != nil {
-		return err
+		return fmt.Errorf("failed to read proto descriptors: %w", err)
 	}
 
 	pc.Disconnect()
@@ -364,7 +375,6 @@ func (pc *ProtoClient) waitForData() {
 	for {
 		select {
 		case response := <-pc.Client.IncomingMsgChan:
-
 			inputMsg := dynamic.NewMessage(pc.expectedInputDescriptor)
 
 			msg, ok := pc.info.Commands[response.Route]
@@ -383,7 +393,7 @@ func (pc *ProtoClient) waitForData() {
 				}
 				response.Data, err = json.Marshal(errMsg)
 				if err != nil {
-					logger.Log.Errorf("Erro encode error to json: %s", string(response.Data))
+					logger.Log.Errorf("error encode error to json: %s", string(response.Data))
 					continue
 				}
 				pc.IncomingMsgChan <- response
@@ -391,19 +401,19 @@ func (pc *ProtoClient) waitForData() {
 			}
 
 			if inputMsg == nil {
-				logger.Log.Errorf("Not expected data: %s", string(response.Data))
+				logger.Log.Errorf("not expected data: %s", string(response.Data))
 				continue
 			}
 
 			err := inputMsg.Unmarshal(response.Data)
 			if err != nil {
-				logger.Log.Errorf("Erro decode data: %s", string(response.Data))
+				logger.Log.Errorf("error decode data: %s", string(response.Data))
 				continue
 			}
 
 			data, err2 := inputMsg.MarshalJSON()
 			if err2 != nil {
-				logger.Log.Errorf("Erro encode data to json: %s", string(response.Data))
+				logger.Log.Errorf("error encode data to json: %s", string(response.Data))
 				continue
 			}
 
@@ -415,31 +425,10 @@ func (pc *ProtoClient) waitForData() {
 	}
 }
 
-// ConnectToTLS connects to the server at addr using TLS, for now the only supported protocol is tcp
-// this methods blocks as it also handles the messages from the server
-func (pc *ProtoClient) ConnectToTLS(addr string, skipVerify bool) error {
-	err := pc.Client.ConnectToTLS(addr, skipVerify)
-	if err != nil {
-		return err
-	}
-
-	if !pc.ready {
-		err = pc.LoadServerInfo(addr)
-		if err != nil {
-			return err
-		}
-	}
-
-	if pc.ready {
-		go pc.waitForData()
-	}
-	return nil
-}
-
 // ConnectTo connects to the server at addr, for now the only supported protocol is tcp
 // this methods blocks as it also handles the messages from the server
-func (pc *ProtoClient) ConnectTo(addr string) error {
-	err := pc.Client.ConnectTo(addr)
+func (pc *ProtoClient) ConnectTo(addr string, tlsConfig ...*tls.Config) error {
+	err := pc.Client.ConnectTo(addr, tlsConfig...)
 	if err != nil {
 		return err
 	}

@@ -27,43 +27,44 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
-	"github.com/topfreegames/pitaya/mocks"
+	"github.com/topfreegames/pitaya/v2/metrics"
+	"github.com/topfreegames/pitaya/v2/mocks"
 )
 
-func TestRateLimiterRead(t *testing.T) {
+func TestRateLimiterGetNextMessage(t *testing.T) {
 	t.Parallel()
 
 	var (
 		limit    = 3
 		interval = time.Second
-		buf      = []byte{}
+		ret      = []byte{0x01, 0x00, 0x00, 0x01, 0x01}
 		errTest  = errors.New("error")
 
-		mockConn *mocks.MockConn
+		mockConn *mocks.MockPlayerConn
 		r        *RateLimiter
 	)
 
 	tables := map[string]struct {
 		forceDisable bool
 		mock         func()
-		expected     int
+		expected     []byte
 		err          error
 	}{
 		"test_can_read_on_first_time": {
 			forceDisable: false,
 			mock: func() {
-				mockConn.EXPECT().Read(buf).Return(10, nil)
+				mockConn.EXPECT().GetNextMessage().Return(ret, nil)
 			},
-			expected: 10,
+			expected: ret,
 			err:      nil,
 		},
 
 		"test_read_return_error": {
 			forceDisable: false,
 			mock: func() {
-				mockConn.EXPECT().Read(buf).Return(0, errTest)
+				mockConn.EXPECT().GetNextMessage().Return(nil, errTest)
 			},
-			expected: 0,
+			expected: nil,
 			err:      errTest,
 		},
 
@@ -71,17 +72,17 @@ func TestRateLimiterRead(t *testing.T) {
 			forceDisable: false,
 			mock: func() {
 				for i := 0; i < limit; i++ {
-					mockConn.EXPECT().Read(buf).Return(10, nil)
-					_, err := r.Read(buf)
+					mockConn.EXPECT().GetNextMessage().Return(ret, nil)
+					_, err := r.GetNextMessage()
 					assert.NoError(t, err)
 				}
 
 				// exceed after this call
-				mockConn.EXPECT().Read(buf).Return(10, nil)
+				mockConn.EXPECT().GetNextMessage().Return(ret, nil)
 				// back to for begin, return error to leave for loop
-				mockConn.EXPECT().Read(buf).Return(0, errTest)
+				mockConn.EXPECT().GetNextMessage().Return(ret, errTest)
 			},
-			expected: 0,
+			expected: nil,
 			err:      errTest,
 		},
 
@@ -89,14 +90,14 @@ func TestRateLimiterRead(t *testing.T) {
 			forceDisable: true,
 			mock: func() {
 				for i := 0; i < limit; i++ {
-					mockConn.EXPECT().Read(buf).Return(10, nil)
-					_, err := r.Read(buf)
+					mockConn.EXPECT().GetNextMessage().Return(ret, nil)
+					_, err := r.GetNextMessage()
 					assert.NoError(t, err)
 				}
 
-				mockConn.EXPECT().Read(buf).Return(10, nil)
+				mockConn.EXPECT().GetNextMessage().Return(ret, nil)
 			},
-			expected: 10, // exceed but ignored, so return the value of read
+			expected: ret, // exceed but ignored, so return the value of read
 			err:      nil,
 		},
 	}
@@ -105,14 +106,14 @@ func TestRateLimiterRead(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
-			mockConn = mocks.NewMockConn(ctrl)
+			mockConn = mocks.NewMockPlayerConn(ctrl)
 
-			r = NewRateLimiter(mockConn, limit, interval, table.forceDisable)
+			r = NewRateLimiter([]metrics.Reporter{}, mockConn, limit, interval, table.forceDisable)
 
 			table.mock()
-			n, err := r.Read(buf)
+			buf, err := r.GetNextMessage()
 			assert.Equal(t, table.err, err)
-			assert.Equal(t, table.expected, n)
+			assert.Equal(t, table.expected, buf)
 		})
 	}
 }
@@ -162,7 +163,7 @@ func TestRateLimiterShouldRateLimit(t *testing.T) {
 
 	for name, table := range tables {
 		t.Run(name, func(t *testing.T) {
-			r = NewRateLimiter(nil, limit, interval, false)
+			r = NewRateLimiter([]metrics.Reporter{}, nil, limit, interval, false)
 
 			table.before()
 			should := r.shouldRateLimit(now)

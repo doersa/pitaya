@@ -5,11 +5,10 @@ import (
 	"flag"
 	"fmt"
 
-	"github.com/spf13/viper"
-	"github.com/topfreegames/pitaya"
-	"github.com/topfreegames/pitaya/acceptor"
-	"github.com/topfreegames/pitaya/component"
-	"github.com/topfreegames/pitaya/serialize/json"
+	"github.com/topfreegames/pitaya/v2"
+	"github.com/topfreegames/pitaya/v2/acceptor"
+	"github.com/topfreegames/pitaya/v2/component"
+	"github.com/topfreegames/pitaya/v2/config"
 )
 
 // MetagameServer ...
@@ -65,7 +64,7 @@ func (g *MetagameServer) HandlerNoArg(ctx context.Context) (*HandlerNoArgRespons
 // IMPORTANT: that this kind of pipeline will be hard to exist in real code
 // as a pipeline function executes for every handler and each of them
 // most probably have different parameter types.
-func (g *MetagameServer) simpleBefore(ctx context.Context, in interface{}) (interface{}, error) {
+func (g *MetagameServer) simpleBefore(ctx context.Context, in interface{}) (context.Context, interface{}, error) {
 	logger := pitaya.GetDefaultLoggerFromCtx(ctx)
 	logger.Info("Simple Before exec")
 
@@ -77,7 +76,7 @@ func (g *MetagameServer) simpleBefore(ctx context.Context, in interface{}) (inte
 		logger.Infof("SoftCurrency: %d", createPlayerArgs.SoftCurrency)
 		logger.Infof("HardCurrency: %d", createPlayerArgs.HardCurrency)
 	}
-	return in, nil
+	return ctx, in, nil
 }
 
 // Simple example of an after pipeline. The 2nd argument is the handler response.
@@ -88,31 +87,31 @@ func (g *MetagameServer) simpleAfter(ctx context.Context, resp interface{}, err 
 	return resp, err
 }
 
+var app pitaya.Pitaya
+
 func main() {
 	svType := flag.String("type", "metagameDemo", "the server type")
 	isFrontend := flag.Bool("frontend", true, "if server is frontend")
 	flag.Parse()
 
-	defer pitaya.Shutdown()
-
+	port := 3251
 	metagameServer := NewMetagameMock()
-	pitaya.SetSerializer(json.NewSerializer())
-	pitaya.Register(metagameServer,
+
+	config := config.NewDefaultBuilderConfig()
+	config.DefaultPipelines.StructValidation.Enabled = true
+
+	builder := pitaya.NewDefaultBuilder(*isFrontend, *svType, pitaya.Cluster, map[string]string{}, *config)
+	tcp := acceptor.NewTCPAcceptor(fmt.Sprintf(":%d", port))
+	builder.AddAcceptor(tcp)
+	builder.HandlerHooks.BeforeHandler.PushBack(metagameServer.simpleBefore)
+	builder.HandlerHooks.AfterHandler.PushBack(metagameServer.simpleAfter)
+	app = builder.Build()
+
+	defer app.Shutdown()
+
+	app.Register(metagameServer,
 		component.WithName("metagameHandler"),
 	)
 
-	// Pipelines registration
-	pitaya.BeforeHandler(metagameServer.simpleBefore)
-	pitaya.AfterHandler(metagameServer.simpleAfter)
-
-	port := 3251
-	tcp := acceptor.NewTCPAcceptor(fmt.Sprintf(":%d", port))
-	pitaya.AddAcceptor(tcp)
-
-	config := viper.New()
-
-	// Enable default validator
-	config.Set("pitaya.defaultpipelines.structvalidation.enabled", true)
-	pitaya.Configure(*isFrontend, *svType, pitaya.Cluster, map[string]string{}, config)
-	pitaya.Start()
+	app.Start()
 }

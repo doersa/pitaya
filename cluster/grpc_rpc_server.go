@@ -26,24 +26,24 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/topfreegames/pitaya/config"
-	"github.com/topfreegames/pitaya/metrics"
-	"github.com/topfreegames/pitaya/protos"
+	"github.com/topfreegames/pitaya/v2/config"
+	"github.com/topfreegames/pitaya/v2/metrics"
+	"github.com/topfreegames/pitaya/v2/protos"
 )
 
 // GRPCServer rpc server struct
 type GRPCServer struct {
 	server           *Server
-	config           *config.Config
+	port             int
 	metricsReporters []metrics.Reporter
 	grpcSv           *grpc.Server
 	pitayaServer     protos.PitayaServer
 }
 
 // NewGRPCServer constructor
-func NewGRPCServer(config *config.Config, server *Server, metricsReporters []metrics.Reporter) (*GRPCServer, error) {
+func NewGRPCServer(config config.GRPCServerConfig, server *Server, metricsReporters []metrics.Reporter) (*GRPCServer, error) {
 	gs := &GRPCServer{
-		config:           config,
+		port:             config.Port,
 		server:           server,
 		metricsReporters: metricsReporters,
 	}
@@ -52,7 +52,7 @@ func NewGRPCServer(config *config.Config, server *Server, metricsReporters []met
 
 // Init inits grpc rpc server
 func (gs *GRPCServer) Init() error {
-	port := gs.config.GetInt("pitaya.cluster.rpc.server.grpc.port")
+	port := gs.port
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		return err

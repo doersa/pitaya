@@ -21,15 +21,20 @@
 package client
 
 import (
-	"github.com/topfreegames/pitaya/conn/message"
+	"crypto/tls"
+
+	"github.com/topfreegames/pitaya/v2/conn/message"
+	"github.com/topfreegames/pitaya/v2/session"
 )
 
+// PitayaClient iface
 type PitayaClient interface {
-	ConnectTo(addr string) error
-	ConnectToTLS(addr string, skipVerify bool) error
+	ConnectTo(addr string, tlsConfig ...*tls.Config) error
+	ConnectToWS(addr string, path string, tlsConfig ...*tls.Config) error
+	ConnectedStatus() bool
 	Disconnect()
+	MsgChannel() chan *message.Message
 	SendNotify(route string, data []byte) error
 	SendRequest(route string, data []byte) (uint, error)
-	ConnectedStatus() bool
-	MsgChannel() chan *message.Message
+	SetClientHandshakeData(data *session.HandshakeData)
 }

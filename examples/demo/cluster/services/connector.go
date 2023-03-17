@@ -5,19 +5,22 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/topfreegames/pitaya"
-	"github.com/topfreegames/pitaya/component"
-	"github.com/topfreegames/pitaya/examples/demo/protos"
+	"github.com/topfreegames/pitaya/v2"
+	"github.com/topfreegames/pitaya/v2/component"
+	"github.com/topfreegames/pitaya/v2/examples/demo/protos"
+	pitayaprotos "github.com/topfreegames/pitaya/v2/protos"
 )
 
 // ConnectorRemote is a remote that will receive rpc's
 type ConnectorRemote struct {
 	component.Base
+	app pitaya.Pitaya
 }
 
 // Connector struct
 type Connector struct {
 	component.Base
+	app pitaya.Pitaya
 }
 
 // SessionData struct
@@ -31,8 +34,18 @@ type Response struct {
 	Msg  string
 }
 
-func reply(code int32, msg string) (*Response, error) {
-	res := &Response{
+// NewConnector ctor
+func NewConnector(app pitaya.Pitaya) *Connector {
+	return &Connector{app: app}
+}
+
+// NewConnectorRemote ctor
+func NewConnectorRemote(app pitaya.Pitaya) *ConnectorRemote {
+	return &ConnectorRemote{app: app}
+}
+
+func reply(code int32, msg string) (*protos.Response, error) {
+	res := &protos.Response{
 		Code: code,
 		Msg:  msg,
 	}
@@ -41,7 +54,7 @@ func reply(code int32, msg string) (*Response, error) {
 
 // GetSessionData gets the session data
 func (c *Connector) GetSessionData(ctx context.Context) (*SessionData, error) {
-	s := pitaya.GetSessionFromCtx(ctx)
+	s := c.app.GetSessionFromCtx(ctx)
 	res := &SessionData{
 		Data: s.GetData(),
 	}
@@ -49,8 +62,8 @@ func (c *Connector) GetSessionData(ctx context.Context) (*SessionData, error) {
 }
 
 // SetSessionData sets the session data
-func (c *Connector) SetSessionData(ctx context.Context, data *SessionData) (*Response, error) {
-	s := pitaya.GetSessionFromCtx(ctx)
+func (c *Connector) SetSessionData(ctx context.Context, data *SessionData) (*protos.Response, error) {
+	s := c.app.GetSessionFromCtx(ctx)
 	err := s.SetData(data.Data)
 	if err != nil {
 		return nil, pitaya.Error(err, "CN-000", map[string]string{"failed": "set data"})
@@ -60,7 +73,7 @@ func (c *Connector) SetSessionData(ctx context.Context, data *SessionData) (*Res
 
 // NotifySessionData sets the session data
 func (c *Connector) NotifySessionData(ctx context.Context, data *SessionData) {
-	s := pitaya.GetSessionFromCtx(ctx)
+	s := c.app.GetSessionFromCtx(ctx)
 	err := s.SetData(data.Data)
 	if err != nil {
 		fmt.Println("got error on notify", err)
@@ -76,8 +89,8 @@ func (c *ConnectorRemote) RemoteFunc(ctx context.Context, msg *protos.RPCMsg) (*
 }
 
 // Docs returns documentation
-func (c *ConnectorRemote) Docs(ctx context.Context, ddd *protos.Doc) (*protos.Doc, error) {
-	d, err := pitaya.Documentation(true)
+func (c *ConnectorRemote) Docs(ctx context.Context, ddd *pitayaprotos.Doc) (*pitayaprotos.Doc, error) {
+	d, err := c.app.Documentation(true)
 	if err != nil {
 		return nil, err
 	}
@@ -87,5 +100,20 @@ func (c *ConnectorRemote) Docs(ctx context.Context, ddd *protos.Doc) (*protos.Do
 		return nil, err
 	}
 
-	return &protos.Doc{Doc: string(doc)}, nil
+	return &pitayaprotos.Doc{Doc: string(doc)}, nil
+}
+
+func (c *ConnectorRemote) Descriptor(ctx context.Context, names *pitayaprotos.ProtoNames) (*pitayaprotos.ProtoDescriptors, error) {
+	descriptors := make([][]byte, len(names.Name))
+
+	for i, protoName := range names.Name {
+		desc, err := pitaya.Descriptor(protoName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get descriptor for '%s': %w", protoName, err)
+		}
+
+		descriptors[i] = desc
+	}
+
+	return &pitayaprotos.ProtoDescriptors{Desc: descriptors}, nil
 }

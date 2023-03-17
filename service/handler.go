@@ -24,57 +24,57 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
+	"github.com/nats-io/nuid"
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/topfreegames/pitaya/v2/acceptor"
+	"github.com/topfreegames/pitaya/v2/pipeline"
+
 	opentracing "github.com/opentracing/opentracing-go"
-	"github.com/topfreegames/pitaya/agent"
-	"github.com/topfreegames/pitaya/cluster"
-	"github.com/topfreegames/pitaya/component"
-	"github.com/topfreegames/pitaya/conn/codec"
-	"github.com/topfreegames/pitaya/conn/message"
-	"github.com/topfreegames/pitaya/conn/packet"
-	"github.com/topfreegames/pitaya/constants"
-	pcontext "github.com/topfreegames/pitaya/context"
-	"github.com/topfreegames/pitaya/docgenerator"
-	e "github.com/topfreegames/pitaya/errors"
-	"github.com/topfreegames/pitaya/logger"
-	"github.com/topfreegames/pitaya/metrics"
-	"github.com/topfreegames/pitaya/route"
-	"github.com/topfreegames/pitaya/serialize"
-	"github.com/topfreegames/pitaya/session"
-	"github.com/topfreegames/pitaya/timer"
-	"github.com/topfreegames/pitaya/tracing"
+	"github.com/topfreegames/pitaya/v2/agent"
+	"github.com/topfreegames/pitaya/v2/cluster"
+	"github.com/topfreegames/pitaya/v2/component"
+	"github.com/topfreegames/pitaya/v2/conn/codec"
+	"github.com/topfreegames/pitaya/v2/conn/message"
+	"github.com/topfreegames/pitaya/v2/conn/packet"
+	"github.com/topfreegames/pitaya/v2/constants"
+	pcontext "github.com/topfreegames/pitaya/v2/context"
+	"github.com/topfreegames/pitaya/v2/docgenerator"
+	e "github.com/topfreegames/pitaya/v2/errors"
+	"github.com/topfreegames/pitaya/v2/logger"
+	"github.com/topfreegames/pitaya/v2/metrics"
+	"github.com/topfreegames/pitaya/v2/route"
+	"github.com/topfreegames/pitaya/v2/serialize"
+	"github.com/topfreegames/pitaya/v2/session"
+	"github.com/topfreegames/pitaya/v2/timer"
+	"github.com/topfreegames/pitaya/v2/tracing"
 )
 
 var (
-	handlers    = make(map[string]*component.Handler) // all handler method
 	handlerType = "handler"
 )
 
 type (
 	// HandlerService service
 	HandlerService struct {
-		appDieChan         chan bool             // die channel app
-		chLocalProcess     chan unhandledMessage // channel of messages that will be processed locally
-		chRemoteProcess    chan unhandledMessage // channel of messages that will be processed remotely
-		decoder            codec.PacketDecoder   // binary decoder
-		encoder            codec.PacketEncoder   // binary encoder
-		heartbeatTimeout   time.Duration
-		messagesBufferSize int
-		remoteService      *RemoteService
-		serializer         serialize.Serializer          // message serializer
-		server             *cluster.Server               // server obj
-		services           map[string]*component.Service // all registered service
-		messageEncoder     message.Encoder
-		metricsReporters   []metrics.Reporter
+		baseService
+		chLocalProcess   chan unhandledMessage // channel of messages that will be processed locally
+		chRemoteProcess  chan unhandledMessage // channel of messages that will be processed remotely
+		decoder          codec.PacketDecoder   // binary decoder
+		remoteService    *RemoteService
+		serializer       serialize.Serializer          // message serializer
+		server           *cluster.Server               // server obj
+		services         map[string]*component.Service // all registered service
+		metricsReporters []metrics.Reporter
+		agentFactory     agent.AgentFactory
+		handlerPool      *HandlerPool
+		handlers         map[string]*component.Handler // all handler method
 	}
 
 	unhandledMessage struct {
 		ctx   context.Context
-		agent *agent.Agent
+		agent agent.Agent
 		route *route.Route
 		msg   *message.Message
 	}
@@ -82,34 +82,32 @@ type (
 
 // NewHandlerService creates and returns a new handler service
 func NewHandlerService(
-	dieChan chan bool,
 	packetDecoder codec.PacketDecoder,
-	packetEncoder codec.PacketEncoder,
 	serializer serialize.Serializer,
-	heartbeatTime time.Duration,
-	messagesBufferSize,
-	localProcessBufferSize,
+	localProcessBufferSize int,
 	remoteProcessBufferSize int,
 	server *cluster.Server,
 	remoteService *RemoteService,
-	messageEncoder message.Encoder,
+	agentFactory agent.AgentFactory,
 	metricsReporters []metrics.Reporter,
+	handlerHooks *pipeline.HandlerHooks,
+	handlerPool *HandlerPool,
 ) *HandlerService {
 	h := &HandlerService{
-		services:           make(map[string]*component.Service),
-		chLocalProcess:     make(chan unhandledMessage, localProcessBufferSize),
-		chRemoteProcess:    make(chan unhandledMessage, remoteProcessBufferSize),
-		decoder:            packetDecoder,
-		encoder:            packetEncoder,
-		messagesBufferSize: messagesBufferSize,
-		serializer:         serializer,
-		heartbeatTimeout:   heartbeatTime,
-		appDieChan:         dieChan,
-		server:             server,
-		remoteService:      remoteService,
-		messageEncoder:     messageEncoder,
-		metricsReporters:   metricsReporters,
+		services:         make(map[string]*component.Service),
+		chLocalProcess:   make(chan unhandledMessage, localProcessBufferSize),
+		chRemoteProcess:  make(chan unhandledMessage, remoteProcessBufferSize),
+		decoder:          packetDecoder,
+		serializer:       serializer,
+		server:           server,
+		remoteService:    remoteService,
+		agentFactory:     agentFactory,
+		metricsReporters: metricsReporters,
+		handlerPool:      handlerPool,
+		handlers:         make(map[string]*component.Handler),
 	}
+
+	h.handlerHooks = handlerHooks
 
 	return h
 }
@@ -157,15 +155,15 @@ func (h *HandlerService) Register(comp component.Component, opts []component.Opt
 	// register all handlers
 	h.services[s.Name] = s
 	for name, handler := range s.Handlers {
-		handlers[fmt.Sprintf("%s.%s", s.Name, name)] = handler
+		h.handlerPool.Register(s.Name, name, handler)
 	}
 	return nil
 }
 
 // Handle handles messages from a conn
-func (h *HandlerService) Handle(conn net.Conn) {
+func (h *HandlerService) Handle(conn acceptor.PlayerConn) {
 	// create a client agent and startup write goroutine
-	a := agent.NewAgent(conn, h.decoder, h.encoder, h.serializer, h.heartbeatTimeout, h.messagesBufferSize, h.appDieChan, h.messageEncoder, h.metricsReporters)
+	a := h.agentFactory.CreateAgent(conn)
 
 	// startup agent goroutine
 	go a.Handle()
@@ -174,30 +172,29 @@ func (h *HandlerService) Handle(conn net.Conn) {
 
 	// guarantee agent related resource is destroyed
 	defer func() {
-		a.Session.Close()
-		logger.Log.Debugf("Session read goroutine exit, SessionID=%d, UID=%d", a.Session.ID(), a.Session.UID())
+		a.GetSession().Close()
+		logger.Log.Debugf("Session read goroutine exit, SessionID=%d, UID=%s", a.GetSession().ID(), a.GetSession().UID())
 	}()
 
-	// read loop
-	buf := make([]byte, 2048)
 	for {
-		n, err := conn.Read(buf)
+		msg, err := conn.GetNextMessage()
+
 		if err != nil {
-			logger.Log.Debugf("Read message error: '%s', session will be closed immediately", err.Error())
+			if err != constants.ErrConnectionClosed {
+				logger.Log.Errorf("Error reading next available message: %s", err.Error())
+			}
+
 			return
 		}
 
-		logger.Log.Debug("Received data on connection")
-
-		// (warning): decoder uses slice for performance, packet data should be copied before next Decode
-		packets, err := h.decoder.Decode(buf[:n])
+		packets, err := h.decoder.Decode(msg)
 		if err != nil {
 			logger.Log.Errorf("Failed to decode message: %s", err.Error())
 			return
 		}
 
 		if len(packets) < 1 {
-			logger.Log.Warnf("Read no packets, data: %v", buf[:n])
+			logger.Log.Warnf("Read no packets, data: %v", msg)
 			continue
 		}
 
@@ -211,7 +208,7 @@ func (h *HandlerService) Handle(conn net.Conn) {
 	}
 }
 
-func (h *HandlerService) processPacket(a *agent.Agent, p *packet.Packet) error {
+func (h *HandlerService) processPacket(a agent.Agent, p *packet.Packet) error {
 	switch p.Type {
 	case packet.Handshake:
 		logger.Log.Debug("Received handshake packet")
@@ -219,19 +216,19 @@ func (h *HandlerService) processPacket(a *agent.Agent, p *packet.Packet) error {
 			logger.Log.Errorf("Error sending handshake response: %s", err.Error())
 			return err
 		}
-		logger.Log.Debugf("Session handshake Id=%d, Remote=%s", a.Session.ID(), a.RemoteAddr())
+		logger.Log.Debugf("Session handshake Id=%d, Remote=%s", a.GetSession().ID(), a.RemoteAddr())
 
 		// Parse the json sent with the handshake by the client
 		handshakeData := &session.HandshakeData{}
 		err := json.Unmarshal(p.Data, handshakeData)
 		if err != nil {
 			a.SetStatus(constants.StatusClosed)
-			return fmt.Errorf("Invalid handshake data. Id=%d", a.Session.ID())
+			return fmt.Errorf("Invalid handshake data. Id=%d", a.GetSession().ID())
 		}
 
-		a.Session.SetHandshakeData(handshakeData)
+		a.GetSession().SetHandshakeData(handshakeData)
 		a.SetStatus(constants.StatusHandshake)
-		err = a.Session.Set(constants.IPVersionKey, a.IPVersion())
+		err = a.GetSession().Set(constants.IPVersionKey, a.IPVersion())
 		if err != nil {
 			logger.Log.Warnf("failed to save ip version on session: %q\n", err)
 		}
@@ -240,7 +237,7 @@ func (h *HandlerService) processPacket(a *agent.Agent, p *packet.Packet) error {
 
 	case packet.HandshakeAck:
 		a.SetStatus(constants.StatusWorking)
-		logger.Log.Debugf("Receive handshake ACK Id=%d, Remote=%s", a.Session.ID(), a.RemoteAddr())
+		logger.Log.Debugf("Receive handshake ACK Id=%d, Remote=%s", a.GetSession().ID(), a.RemoteAddr())
 
 	case packet.Data:
 		if a.GetStatus() < constants.StatusWorking {
@@ -262,20 +259,20 @@ func (h *HandlerService) processPacket(a *agent.Agent, p *packet.Packet) error {
 	return nil
 }
 
-func (h *HandlerService) processMessage(a *agent.Agent, msg *message.Message) {
-	requestID := uuid.New()
+func (h *HandlerService) processMessage(a agent.Agent, msg *message.Message) {
+	requestID := nuid.New()
 	ctx := pcontext.AddToPropagateCtx(context.Background(), constants.StartTimeKey, time.Now().UnixNano())
 	ctx = pcontext.AddToPropagateCtx(ctx, constants.RouteKey, msg.Route)
-	ctx = pcontext.AddToPropagateCtx(ctx, constants.RequestIDKey, requestID.String())
+	ctx = pcontext.AddToPropagateCtx(ctx, constants.RequestIDKey, requestID)
 	tags := opentracing.Tags{
 		"local.id":   h.server.ID,
 		"span.kind":  "server",
 		"msg.type":   strings.ToLower(msg.Type.String()),
-		"user.id":    a.Session.UID(),
-		"request.id": requestID.String(),
+		"user.id":    a.GetSession().UID(),
+		"request.id": requestID,
 	}
 	ctx = tracing.StartSpan(ctx, msg.Route, tags)
-	ctx = context.WithValue(ctx, constants.SessionCtxKey, a.Session)
+	ctx = context.WithValue(ctx, constants.SessionCtxKey, a.GetSession())
 
 	r, err := route.Decode(msg.Route)
 	if err != nil {
@@ -305,7 +302,7 @@ func (h *HandlerService) processMessage(a *agent.Agent, msg *message.Message) {
 	}
 }
 
-func (h *HandlerService) localProcess(ctx context.Context, a *agent.Agent, route *route.Route, msg *message.Message) {
+func (h *HandlerService) localProcess(ctx context.Context, a agent.Agent, route *route.Route, msg *message.Message) {
 	var mid uint
 	switch msg.Type {
 	case message.Request:
@@ -314,13 +311,17 @@ func (h *HandlerService) localProcess(ctx context.Context, a *agent.Agent, route
 		mid = 0
 	}
 
-	ret, err := processHandlerMessage(ctx, route, h.serializer, a.Session, msg.Data, msg.Type, false)
+	ret, err := h.handlerPool.ProcessHandlerMessage(ctx, route, h.serializer, h.handlerHooks, a.GetSession(), msg.Data, msg.Type, false)
 	if msg.Type != message.Notify {
 		if err != nil {
 			logger.Log.Errorf("Failed to process handler message: %s", err.Error())
 			a.AnswerWithError(ctx, mid, err)
 		} else {
-			a.Session.ResponseMID(ctx, mid, ret)
+			err := a.GetSession().ResponseMID(ctx, mid, ret)
+			if err != nil {
+				tracing.FinishSpan(ctx, err)
+				metrics.ReportTimingFromCtx(ctx, h.metricsReporters, handlerType, err)
+			}
 		}
 	} else {
 		metrics.ReportTimingFromCtx(ctx, h.metricsReporters, handlerType, nil)
@@ -330,8 +331,9 @@ func (h *HandlerService) localProcess(ctx context.Context, a *agent.Agent, route
 
 // DumpServices outputs all registered services
 func (h *HandlerService) DumpServices() {
+	handlers := h.handlerPool.GetHandlers()
 	for name := range handlers {
-		logger.Log.Infof("registered handler %s, isRawArg: %s", name, handlers[name].IsRawArg)
+		logger.Log.Infof("registered handler %s, isRawArg: %v", name, handlers[name].IsRawArg)
 	}
 }
 
