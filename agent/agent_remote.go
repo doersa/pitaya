@@ -26,23 +26,23 @@ import (
 	"reflect"
 
 	"github.com/golang/protobuf/proto"
-	"github.com/topfreegames/pitaya/v2/cluster"
-	"github.com/topfreegames/pitaya/v2/conn/codec"
-	"github.com/topfreegames/pitaya/v2/conn/message"
-	"github.com/topfreegames/pitaya/v2/conn/packet"
-	"github.com/topfreegames/pitaya/v2/constants"
-	"github.com/topfreegames/pitaya/v2/logger"
-	"github.com/topfreegames/pitaya/v2/protos"
-	"github.com/topfreegames/pitaya/v2/route"
-	"github.com/topfreegames/pitaya/v2/serialize"
-	"github.com/topfreegames/pitaya/v2/session"
-	"github.com/topfreegames/pitaya/v2/util"
+	"github.com/topfreegames/pitaya/cluster"
+	"github.com/topfreegames/pitaya/conn/codec"
+	"github.com/topfreegames/pitaya/conn/message"
+	"github.com/topfreegames/pitaya/conn/packet"
+	"github.com/topfreegames/pitaya/constants"
+	"github.com/topfreegames/pitaya/logger"
+	"github.com/topfreegames/pitaya/protos"
+	"github.com/topfreegames/pitaya/route"
+	"github.com/topfreegames/pitaya/serialize"
+	"github.com/topfreegames/pitaya/session"
+	"github.com/topfreegames/pitaya/util"
 )
 
 // Remote corresponding to another server
 type Remote struct {
-	Session          session.Session // session
-	chDie            chan struct{}   // wait for close
+	Session          *session.Session // session
+	chDie            chan struct{}    // wait for close
 	messageEncoder   message.Encoder
 	encoder          codec.PacketEncoder      // binary encoder
 	frontendID       string                   // the frontend that sent the request
@@ -62,7 +62,6 @@ func NewRemote(
 	serviceDiscovery cluster.ServiceDiscovery,
 	frontendID string,
 	messageEncoder message.Encoder,
-	sessionPool session.SessionPool,
 ) (*Remote, error) {
 	a := &Remote{
 		chDie:            make(chan struct{}),
@@ -76,7 +75,7 @@ func NewRemote(
 	}
 
 	// binding session
-	s := sessionPool.NewSession(a, false, sess.GetUid())
+	s := session.New(a, false, sess.GetUid())
 	s.SetFrontendData(frontendID, sess.GetId())
 	err := s.SetDataEncoded(sess.GetData())
 	if err != nil {
@@ -110,10 +109,10 @@ func (a *Remote) Push(route string, v interface{}) error {
 	}
 	switch d := v.(type) {
 	case []byte:
-		logger.Log.Debugf("Type=Push, ID=%d, UID=%s, Route=%s, Data=%dbytes",
+		logger.Log.Debugf("Type=Push, ID=%d, UID=%d, Route=%s, Data=%dbytes",
 			a.Session.ID(), a.Session.UID(), route, len(d))
 	default:
-		logger.Log.Debugf("Type=Push, ID=%d, UID=%s, Route=%s, Data=%+v",
+		logger.Log.Debugf("Type=Push, ID=%d, UID=%d, Route=%s, Data=%+v",
 			a.Session.ID(), a.Session.UID(), route, v)
 	}
 

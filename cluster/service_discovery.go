@@ -20,14 +20,14 @@
 
 package cluster
 
-import "github.com/topfreegames/pitaya/v2/interfaces"
+import "github.com/topfreegames/pitaya/interfaces"
 
 // ServiceDiscovery is the interface for a service discovery client
 type ServiceDiscovery interface {
 	GetServersByType(serverType string) (map[string]*Server, error)
 	GetServer(id string) (*Server, error)
 	GetServers() []*Server
-	SyncServers(firstSync bool) error
+	SyncServers() error
 	AddListener(listener SDListener)
 	interfaces.Module
 }

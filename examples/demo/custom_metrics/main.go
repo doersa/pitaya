@@ -3,17 +3,26 @@ package main
 import (
 	"flag"
 	"fmt"
+
 	"strings"
 
 	"github.com/spf13/viper"
-	"github.com/topfreegames/pitaya/v2"
-	"github.com/topfreegames/pitaya/v2/acceptor"
-	"github.com/topfreegames/pitaya/v2/component"
-	"github.com/topfreegames/pitaya/v2/config"
-	"github.com/topfreegames/pitaya/v2/examples/demo/custom_metrics/services"
+	"github.com/topfreegames/pitaya"
+	"github.com/topfreegames/pitaya/acceptor"
+	"github.com/topfreegames/pitaya/component"
+	"github.com/topfreegames/pitaya/examples/demo/custom_metrics/services"
+	"github.com/topfreegames/pitaya/serialize/json"
 )
 
-var app pitaya.Pitaya
+func configureRoom(port int) {
+	tcp := acceptor.NewTCPAcceptor(fmt.Sprintf(":%d", port))
+	pitaya.AddAcceptor(tcp)
+
+	pitaya.Register(&services.Room{},
+		component.WithName("room"),
+		component.WithNameFunc(strings.ToLower),
+	)
+}
 
 func main() {
 	port := flag.Int("port", 3250, "the port to listen")
@@ -22,27 +31,19 @@ func main() {
 
 	flag.Parse()
 
-	cfg := viper.New()
-	cfg.AddConfigPath(".")
-	cfg.SetConfigName("config")
-	err := cfg.ReadInConfig()
+	defer pitaya.Shutdown()
+
+	pitaya.SetSerializer(json.NewSerializer())
+
+	config := viper.New()
+	config.AddConfigPath(".")
+	config.SetConfigName("config")
+	err := config.ReadInConfig()
 	if err != nil {
 		panic(err)
 	}
 
-	tcp := acceptor.NewTCPAcceptor(fmt.Sprintf(":%d", *port))
-
-	conf := config.NewConfig(cfg)
-	builder := pitaya.NewBuilderWithConfigs(isFrontend, svType, pitaya.Cluster, map[string]string{}, conf)
-	builder.AddAcceptor(tcp)
-	app = builder.Build()
-
-	defer app.Shutdown()
-
-	app.Register(services.NewRoom(app),
-		component.WithName("room"),
-		component.WithNameFunc(strings.ToLower),
-	)
-
-	app.Start()
+	pitaya.Configure(isFrontend, svType, pitaya.Cluster, map[string]string{}, config)
+	configureRoom(*port)
+	pitaya.Start()
 }

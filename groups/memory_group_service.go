@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/topfreegames/pitaya/v2/config"
-	"github.com/topfreegames/pitaya/v2/constants"
+	"github.com/topfreegames/pitaya/config"
+	"github.com/topfreegames/pitaya/constants"
 )
 
 var (
@@ -27,16 +27,16 @@ type MemoryGroup struct {
 }
 
 // NewMemoryGroupService returns a new group instance
-func NewMemoryGroupService(config config.MemoryGroupConfig) *MemoryGroupService {
+func NewMemoryGroupService(conf *config.Config) *MemoryGroupService {
 	memoryOnce.Do(func() {
 		memoryGroups = make(map[string]*MemoryGroup)
-		go groupTTLCleanup(config.TickDuration)
+		go groupTTLCleanup(conf)
 	})
 	return &MemoryGroupService{}
 }
 
-func groupTTLCleanup(duration time.Duration) {
-	for now := range time.Tick(duration) {
+func groupTTLCleanup(conf *config.Config) {
+	for now := range time.Tick(conf.GetDuration("pitaya.groups.memory.tickduration")) {
 		memoryGroupsMu.Lock()
 		for groupName, mg := range memoryGroups {
 			if mg.TTL != 0 && now.UnixNano()-mg.LastRefresh > mg.TTL {
@@ -196,6 +196,7 @@ func (c *MemoryGroupService) GroupRenewTTL(ctx context.Context, groupName string
 
 	if mg.TTL != 0 {
 		mg.LastRefresh = time.Now().UnixNano()
+		memoryGroups[groupName] = mg
 		return nil
 	}
 	return constants.ErrMemoryTTLNotFound

@@ -30,27 +30,24 @@ import (
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
-	"github.com/topfreegames/pitaya/v2"
-	"github.com/topfreegames/pitaya/v2/acceptor"
-	"github.com/topfreegames/pitaya/v2/cluster"
-	"github.com/topfreegames/pitaya/v2/component"
-	"github.com/topfreegames/pitaya/v2/config"
-	"github.com/topfreegames/pitaya/v2/constants"
-	"github.com/topfreegames/pitaya/v2/examples/testing/protos"
-	"github.com/topfreegames/pitaya/v2/groups"
-	logruswrapper "github.com/topfreegames/pitaya/v2/logger/logrus"
-	"github.com/topfreegames/pitaya/v2/modules"
-	"github.com/topfreegames/pitaya/v2/protos/test"
-	"github.com/topfreegames/pitaya/v2/serialize/json"
-	"github.com/topfreegames/pitaya/v2/serialize/protobuf"
-	"github.com/topfreegames/pitaya/v2/session"
+	"github.com/topfreegames/pitaya"
+	"github.com/topfreegames/pitaya/acceptor"
+	"github.com/topfreegames/pitaya/cluster"
+	"github.com/topfreegames/pitaya/component"
+	"github.com/topfreegames/pitaya/config"
+	"github.com/topfreegames/pitaya/constants"
+	"github.com/topfreegames/pitaya/examples/testing/protos"
+	"github.com/topfreegames/pitaya/groups"
+	"github.com/topfreegames/pitaya/modules"
+	"github.com/topfreegames/pitaya/protos/test"
+	"github.com/topfreegames/pitaya/serialize/json"
+	"github.com/topfreegames/pitaya/serialize/protobuf"
+	"github.com/topfreegames/pitaya/session"
 )
 
 // TestSvc service for e2e tests
 type TestSvc struct {
 	component.Base
-	app         pitaya.Pitaya
-	sessionPool session.SessionPool
 }
 
 // TestRemoteSvc remote service for e2e tests
@@ -101,7 +98,9 @@ func (tr *TestRemoteSvc) RPCTestNoArgs(ctx context.Context) (*test.TestResponse,
 
 // Init inits testsvc
 func (t *TestSvc) Init() {
-	err := t.app.GroupCreate(context.Background(), "g1")
+	gsi := groups.NewMemoryGroupService(config.NewConfig())
+	pitaya.InitGroups(gsi)
+	err := pitaya.GroupCreate(context.Background(), "g1")
 	if err != nil {
 		panic(err)
 	}
@@ -109,7 +108,7 @@ func (t *TestSvc) Init() {
 
 // TestRequestKickUser handler for e2e tests
 func (t *TestSvc) TestRequestKickUser(ctx context.Context, userID []byte) (*test.TestResponse, error) {
-	s := t.sessionPool.GetSessionByUID(string(userID))
+	s := session.GetSessionByUID(string(userID))
 	if s == nil {
 		return nil, pitaya.Error(constants.ErrSessionNotFound, "PIT-404")
 	}
@@ -125,7 +124,7 @@ func (t *TestSvc) TestRequestKickUser(ctx context.Context, userID []byte) (*test
 
 // TestRequestKickMe handler for e2e tests
 func (t *TestSvc) TestRequestKickMe(ctx context.Context) (*test.TestResponse, error) {
-	s := t.app.GetSessionFromCtx(ctx)
+	s := pitaya.GetSessionFromCtx(ctx)
 	if s == nil {
 		return nil, pitaya.Error(constants.ErrSessionNotFound, "PIT-404")
 	}
@@ -183,12 +182,12 @@ func (t *TestSvc) TestRequestReturnsError(ctx context.Context, in []byte) ([]byt
 // TestBind handler for e2e tests
 func (t *TestSvc) TestBind(ctx context.Context) ([]byte, error) {
 	uid := uuid.New().String()
-	s := t.app.GetSessionFromCtx(ctx)
+	s := pitaya.GetSessionFromCtx(ctx)
 	err := s.Bind(ctx, uid)
 	if err != nil {
 		return nil, pitaya.Error(err, "PIT-444")
 	}
-	err = t.app.GroupAddMember(ctx, "g1", s.UID())
+	err = pitaya.GroupAddMember(ctx, "g1", s.UID())
 	if err != nil {
 		return nil, pitaya.Error(err, "PIT-441")
 	}
@@ -197,12 +196,12 @@ func (t *TestSvc) TestBind(ctx context.Context) ([]byte, error) {
 
 // TestBindID handler for e2e tests
 func (t *TestSvc) TestBindID(ctx context.Context, byteUID []byte) ([]byte, error) {
-	s := t.app.GetSessionFromCtx(ctx)
+	s := pitaya.GetSessionFromCtx(ctx)
 	err := s.Bind(ctx, string(byteUID))
 	if err != nil {
 		return nil, pitaya.Error(err, "PIT-444")
 	}
-	err = t.app.GroupAddMember(ctx, "g1", s.UID())
+	err = pitaya.GroupAddMember(ctx, "g1", s.UID())
 	if err != nil {
 		return nil, pitaya.Error(err, "PIT-441")
 	}
@@ -211,23 +210,23 @@ func (t *TestSvc) TestBindID(ctx context.Context, byteUID []byte) ([]byte, error
 
 // TestSendGroupMsg handler for e2e tests
 func (t *TestSvc) TestSendGroupMsg(ctx context.Context, msg []byte) {
-	t.app.GroupBroadcast(ctx, "connector", "g1", "route.test", msg)
+	pitaya.GroupBroadcast(ctx, "connector", "g1", "route.test", msg)
 }
 
 // TestSendGroupMsgPtr handler for e2e tests
 func (t *TestSvc) TestSendGroupMsgPtr(ctx context.Context, msg *test.TestRequest) {
-	t.app.GroupBroadcast(ctx, "connector", "g1", "route.testptr", msg)
+	pitaya.GroupBroadcast(ctx, "connector", "g1", "route.testptr", msg)
 }
 
 // TestSendToUsers handler for e2e tests
 func (t *TestSvc) TestSendToUsers(ctx context.Context, msg *TestSendToUsers) {
-	t.app.SendPushToUsers("route.sendtousers", []byte(msg.Msg), msg.UIDs, "connector")
+	pitaya.SendPushToUsers("route.sendtousers", []byte(msg.Msg), msg.UIDs, "connector")
 }
 
 // TestSendRPC tests sending a RPC
 func (t *TestSvc) TestSendRPC(ctx context.Context, msg *TestRPCRequest) (*protos.TestResponse, error) {
 	rep := &protos.TestResponse{}
-	err := t.app.RPC(ctx, msg.Route, rep, &protos.TestRequest{Msg: msg.Data})
+	err := pitaya.RPC(ctx, msg.Route, rep, &protos.TestRequest{Msg: msg.Data})
 	if err != nil {
 		return nil, err
 	}
@@ -237,14 +236,12 @@ func (t *TestSvc) TestSendRPC(ctx context.Context, msg *TestRPCRequest) (*protos
 // TestSendRPCNoArgs tests sending a RPC
 func (t *TestSvc) TestSendRPCNoArgs(ctx context.Context, msg *TestRPCRequest) (*protos.TestResponse, error) {
 	rep := &protos.TestResponse{}
-	err := t.app.RPC(ctx, msg.Route, rep, nil)
+	err := pitaya.RPC(ctx, msg.Route, rep, nil)
 	if err != nil {
 		return nil, err
 	}
 	return rep, nil
 }
-
-// var app pitaya.Pitaya
 
 func main() {
 	port := flag.Int("port", 32222, "the port to listen")
@@ -258,10 +255,6 @@ func main() {
 
 	flag.Parse()
 
-	cfg := viper.New()
-	cfg.Set("pitaya.cluster.sd.etcd.prefix", *sdPrefix)
-	cfg.Set("pitaya.cluster.rpc.server.grpc.port", *grpcPort)
-
 	l := logrus.New()
 	l.Formatter = &logrus.TextFormatter{}
 	l.SetLevel(logrus.InfoLevel)
@@ -269,76 +262,64 @@ func main() {
 		l.SetLevel(logrus.DebugLevel)
 	}
 
-	pitaya.SetLogger(logruswrapper.NewWithFieldLogger(l))
+	pitaya.SetLogger(l)
 
-	app, bs, sessionPool := createApp(*serializer, *port, *grpc, *isFrontend, *svType, pitaya.Cluster, map[string]string{
-		constants.GRPCHostKey: "127.0.0.1",
-		constants.GRPCPortKey: fmt.Sprintf("%d", *grpcPort),
-	}, cfg)
+	tcp := acceptor.NewTCPAcceptor(fmt.Sprintf(":%d", *port))
 
-	if *grpc {
-		app.RegisterModule(bs, "bindingsStorage")
-	}
-
-	app.Register(
-		&TestSvc{
-			app:         app,
-			sessionPool: sessionPool,
-		},
+	pitaya.Register(
+		&TestSvc{},
 		component.WithName("testsvc"),
 		component.WithNameFunc(strings.ToLower),
 	)
 
-	app.RegisterRemote(
+	pitaya.RegisterRemote(
 		&TestRemoteSvc{},
 		component.WithName("testremotesvc"),
 		component.WithNameFunc(strings.ToLower),
 	)
 
-	app.Start()
-}
-
-func createApp(serializer string, port int, grpc bool, isFrontend bool, svType string, serverMode pitaya.ServerMode, metadata map[string]string, cfg ...*viper.Viper) (pitaya.Pitaya, *modules.ETCDBindingStorage, session.SessionPool) {
-	conf := config.NewConfig(cfg...)
-	builder := pitaya.NewBuilderWithConfigs(isFrontend, svType, serverMode, metadata, conf)
-
-	if isFrontend {
-		tcp := acceptor.NewTCPAcceptor(fmt.Sprintf(":%d", port))
-		builder.AddAcceptor(tcp)
-	}
-
-	builder.Groups = groups.NewMemoryGroupService(*config.NewDefaultMemoryGroupConfig())
-
-	if serializer == "json" {
-		builder.Serializer = json.NewSerializer()
-	} else if serializer == "protobuf" {
-		builder.Serializer = protobuf.NewSerializer()
+	if *serializer == "json" {
+		pitaya.SetSerializer(json.NewSerializer())
+	} else if *serializer == "protobuf" {
+		pitaya.SetSerializer(protobuf.NewSerializer())
 	} else {
 		panic("serializer should be either json or protobuf")
 	}
 
-	var bs *modules.ETCDBindingStorage
-	if grpc {
-		gs, err := cluster.NewGRPCServer(*config.NewGRPCServerConfig(conf), builder.Server, builder.MetricsReporters)
+	if *isFrontend {
+		pitaya.AddAcceptor(tcp)
+	}
+
+	cfg := viper.New()
+	cfg.Set("pitaya.cluster.sd.etcd.prefix", *sdPrefix)
+	cfg.Set("pitaya.cluster.rpc.server.grpc.port", *grpcPort)
+
+	pitaya.Configure(*isFrontend, *svType, pitaya.Cluster, map[string]string{
+		constants.GRPCHostKey: "127.0.0.1",
+		constants.GRPCPortKey: fmt.Sprintf("%d", *grpcPort),
+	}, cfg)
+	if *grpc {
+		gs, err := cluster.NewGRPCServer(pitaya.GetConfig(), pitaya.GetServer(), pitaya.GetMetricsReporters())
 		if err != nil {
 			panic(err)
 		}
 
-		bs = modules.NewETCDBindingStorage(builder.Server, builder.SessionPool, *config.NewETCDBindingConfig(conf))
+		bs := modules.NewETCDBindingStorage(pitaya.GetServer(), pitaya.GetConfig())
+		pitaya.RegisterModule(bs, "bindingsStorage")
 
 		gc, err := cluster.NewGRPCClient(
-			*config.NewGRPCClientConfig(conf),
-			builder.Server,
-			builder.MetricsReporters,
+			pitaya.GetConfig(),
+			pitaya.GetServer(),
+			pitaya.GetMetricsReporters(),
 			bs,
-			cluster.NewInfoRetriever(*config.NewInfoRetrieverConfig(conf)),
+			cluster.NewConfigInfoRetriever(pitaya.GetConfig()),
 		)
 		if err != nil {
 			panic(err)
 		}
-		builder.RPCServer = gs
-		builder.RPCClient = gc
+		pitaya.SetRPCServer(gs)
+		pitaya.SetRPCClient(gc)
 	}
 
-	return builder.Build(), bs, builder.SessionPool
+	pitaya.Start()
 }

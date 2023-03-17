@@ -25,24 +25,24 @@ import (
 	"reflect"
 
 	"github.com/golang/protobuf/proto"
-	"github.com/topfreegames/pitaya/v2/config"
-	"github.com/topfreegames/pitaya/v2/constants"
-	"github.com/topfreegames/pitaya/v2/route"
+	"github.com/topfreegames/pitaya/constants"
+	"github.com/topfreegames/pitaya/route"
+	"github.com/topfreegames/pitaya/worker"
 )
 
 // RPC calls a method in a different server
-func (app *App) RPC(ctx context.Context, routeStr string, reply proto.Message, arg proto.Message) error {
-	return app.doSendRPC(ctx, "", routeStr, reply, arg)
+func RPC(ctx context.Context, routeStr string, reply proto.Message, arg proto.Message) error {
+	return doSendRPC(ctx, "", routeStr, reply, arg)
 }
 
 // RPCTo send a rpc to a specific server
-func (app *App) RPCTo(ctx context.Context, serverID, routeStr string, reply proto.Message, arg proto.Message) error {
-	return app.doSendRPC(ctx, serverID, routeStr, reply, arg)
+func RPCTo(ctx context.Context, serverID, routeStr string, reply proto.Message, arg proto.Message) error {
+	return doSendRPC(ctx, serverID, routeStr, reply, arg)
 }
 
 // ReliableRPC enqueues RPC to worker so it's executed asynchronously
 // Default enqueue options are used
-func (app *App) ReliableRPC(
+func ReliableRPC(
 	routeStr string,
 	metadata map[string]interface{},
 	reply, arg proto.Message,
@@ -52,16 +52,16 @@ func (app *App) ReliableRPC(
 
 // ReliableRPCWithOptions enqueues RPC to worker
 // Receive worker options for this specific RPC
-func (app *App) ReliableRPCWithOptions(
+func ReliableRPCWithOptions(
 	routeStr string,
 	metadata map[string]interface{},
 	reply, arg proto.Message,
-	opts *config.EnqueueOpts,
+	opts *worker.EnqueueOpts,
 ) (jid string, err error) {
 	return app.worker.EnqueueRPCWithOptions(routeStr, metadata, reply, arg, opts)
 }
 
-func (app *App) doSendRPC(ctx context.Context, serverID, routeStr string, reply proto.Message, arg proto.Message) error {
+func doSendRPC(ctx context.Context, serverID, routeStr string, reply proto.Message, arg proto.Message) error {
 	if app.rpcServer == nil {
 		return constants.ErrRPCServerNotInitialized
 	}
@@ -83,5 +83,5 @@ func (app *App) doSendRPC(ctx context.Context, serverID, routeStr string, reply 
 		return constants.ErrNonsenseRPC
 	}
 
-	return app.remoteService.RPC(ctx, serverID, r, reply, arg)
+	return remoteService.RPC(ctx, serverID, r, reply, arg)
 }

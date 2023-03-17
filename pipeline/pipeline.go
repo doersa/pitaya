@@ -20,85 +20,35 @@
 
 package pipeline
 
-import (
-	"context"
+import "context"
 
-	"github.com/topfreegames/pitaya/v2/logger"
+var (
+	// BeforeHandler contains the functions to be called before the handler method is executed
+	BeforeHandler = &pipelineChannel{}
+	// AfterHandler contains the functions to be called after the handler method is executed
+	AfterHandler = &pipelineAfterChannel{}
 )
 
 type (
 	// HandlerTempl is a function that has the same signature as a handler and will
 	// be called before or after handler methods
-	HandlerTempl func(ctx context.Context, in interface{}) (c context.Context, out interface{}, err error)
+	HandlerTempl func(ctx context.Context, in interface{}) (out interface{}, err error)
 
 	// AfterHandlerTempl is a function for the after handler, receives both the handler response
 	// and the error returned
 	AfterHandlerTempl func(ctx context.Context, out interface{}, err error) (interface{}, error)
 
-	// Channel contains the functions to be called before the handler method is executed
-	Channel struct {
+	pipelineChannel struct {
 		Handlers []HandlerTempl
 	}
 
-	// AfterChannel contains the functions to be called after the handler method is executed
-	AfterChannel struct {
+	pipelineAfterChannel struct {
 		Handlers []AfterHandlerTempl
-	}
-
-	// HandlerHooks contains before and after channels
-	HandlerHooks struct {
-		BeforeHandler *Channel
-		AfterHandler  *AfterChannel
 	}
 )
 
-// NewHandlerHooks ctor
-func NewHandlerHooks() *HandlerHooks {
-	return &HandlerHooks{
-		BeforeHandler: NewChannel(),
-		AfterHandler:  NewAfterChannel(),
-	}
-}
-
-// NewChannel ctor
-func NewChannel() *Channel {
-	return &Channel{Handlers: []HandlerTempl{}}
-}
-
-// NewAfterChannel ctor
-func NewAfterChannel() *AfterChannel {
-	return &AfterChannel{Handlers: []AfterHandlerTempl{}}
-}
-
-// ExecuteBeforePipeline calls registered handlers
-func (p *Channel) ExecuteBeforePipeline(ctx context.Context, data interface{}) (context.Context, interface{}, error) {
-	var err error
-	res := data
-	if len(p.Handlers) > 0 {
-		for _, h := range p.Handlers {
-			ctx, res, err = h(ctx, res)
-			if err != nil {
-				logger.Log.Debugf("pitaya/handler: broken pipeline: %s", err.Error())
-				return ctx, res, err
-			}
-		}
-	}
-	return ctx, res, nil
-}
-
-// ExecuteAfterPipeline calls registered handlers
-func (p *AfterChannel) ExecuteAfterPipeline(ctx context.Context, res interface{}, err error) (interface{}, error) {
-	ret := res
-	if len(p.Handlers) > 0 {
-		for _, h := range p.Handlers {
-			ret, err = h(ctx, ret, err)
-		}
-	}
-	return ret, err
-}
-
 // PushFront should not be used after pitaya is running
-func (p *Channel) PushFront(h HandlerTempl) {
+func (p *pipelineChannel) PushFront(h HandlerTempl) {
 	Handlers := make([]HandlerTempl, len(p.Handlers)+1)
 	Handlers[0] = h
 	copy(Handlers[1:], p.Handlers)
@@ -106,17 +56,17 @@ func (p *Channel) PushFront(h HandlerTempl) {
 }
 
 // PushBack should not be used after pitaya is running
-func (p *Channel) PushBack(h HandlerTempl) {
+func (p *pipelineChannel) PushBack(h HandlerTempl) {
 	p.Handlers = append(p.Handlers, h)
 }
 
 // Clear should not be used after pitaya is running
-func (p *Channel) Clear() {
+func (p *pipelineChannel) Clear() {
 	p.Handlers = make([]HandlerTempl, 0)
 }
 
 // PushFront should not be used after pitaya is running
-func (p *AfterChannel) PushFront(h AfterHandlerTempl) {
+func (p *pipelineAfterChannel) PushFront(h AfterHandlerTempl) {
 	Handlers := make([]AfterHandlerTempl, len(p.Handlers)+1)
 	Handlers[0] = h
 	copy(Handlers[1:], p.Handlers)
@@ -124,11 +74,11 @@ func (p *AfterChannel) PushFront(h AfterHandlerTempl) {
 }
 
 // PushBack should not be used after pitaya is running
-func (p *AfterChannel) PushBack(h AfterHandlerTempl) {
+func (p *pipelineAfterChannel) PushBack(h AfterHandlerTempl) {
 	p.Handlers = append(p.Handlers, h)
 }
 
 // Clear should not be used after pitaya is running
-func (p *AfterChannel) Clear() {
+func (p *pipelineAfterChannel) Clear() {
 	p.Handlers = make([]AfterHandlerTempl, 0)
 }

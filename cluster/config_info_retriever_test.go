@@ -5,17 +5,17 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
-	"github.com/topfreegames/pitaya/v2/config"
+	"github.com/topfreegames/pitaya/config"
 )
 
-func TestInfoRetrieverRegion(t *testing.T) {
+func TestConfigInfoRetrieverRegion(t *testing.T) {
 	t.Parallel()
 
 	c := viper.New()
 	c.Set("pitaya.cluster.info.region", "us")
-	conf := config.NewConfig(c)
+	config := config.NewConfig(c)
 
-	infoRetriever := NewInfoRetriever(*config.NewInfoRetrieverConfig(conf))
+	infoRetriever := NewConfigInfoRetriever(config)
 
 	assert.Equal(t, "us", infoRetriever.Region())
 }

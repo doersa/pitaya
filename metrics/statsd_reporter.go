@@ -22,11 +22,11 @@ package metrics
 
 import (
 	"fmt"
-	"github.com/topfreegames/pitaya/v2/constants"
+	"strconv"
 
 	"github.com/DataDog/datadog-go/statsd"
-	"github.com/topfreegames/pitaya/v2/config"
-	"github.com/topfreegames/pitaya/v2/logger"
+	"github.com/topfreegames/pitaya/config"
+	"github.com/topfreegames/pitaya/logger"
 )
 
 // Client is the interface to required dogstatsd functions
@@ -44,35 +44,34 @@ type StatsdReporter struct {
 	defaultTags []string
 }
 
-// NewStatsdReporter returns an instance of statsd reportar and an
-// error if something fails
+// NewStatsdReporter returns an instance of statsd reportar and an error if something fails
 func NewStatsdReporter(
-	config config.StatsdConfig,
+	config *config.Config,
 	serverType string,
+	tagsMap map[string]string,
 	clientOrNil ...Client,
 ) (*StatsdReporter, error) {
-	return newStatsdReporter(config, serverType, clientOrNil...)
-}
-
-func newStatsdReporter(
-	config config.StatsdConfig,
-	serverType string,
-	clientOrNil ...Client) (*StatsdReporter, error) {
+	host := config.GetString("pitaya.metrics.statsd.host")
+	prefix := config.GetString("pitaya.metrics.statsd.prefix")
+	rate, err := strconv.ParseFloat(config.GetString("pitaya.metrics.statsd.rate"), 64)
+	if err != nil {
+		return nil, err
+	}
 	sr := &StatsdReporter{
-		rate:       config.Statsd.Rate,
+		rate:       rate,
 		serverType: serverType,
 	}
 
-	sr.buildDefaultTags(config.ConstLabels)
+	sr.buildDefaultTags(tagsMap)
 
 	if len(clientOrNil) > 0 {
 		sr.client = clientOrNil[0]
 	} else {
-		c, err := statsd.New(config.Statsd.Host)
+		c, err := statsd.New(host)
 		if err != nil {
 			return nil, err
 		}
-		c.Namespace = config.Statsd.Prefix
+		c.Namespace = prefix
 		sr.client = c
 	}
 	return sr, nil
@@ -138,9 +137,4 @@ func (s *StatsdReporter) ReportSummary(metric string, tagsMap map[string]string,
 	}
 
 	return err
-}
-
-// ReportHistogram observes the histogram value and reports to statsd
-func (s *StatsdReporter) ReportHistogram(metric string, tagsMap map[string]string, value float64) error {
-	return constants.ErrNotImplemented
 }

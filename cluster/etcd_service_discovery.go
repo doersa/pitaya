@@ -27,50 +27,46 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"github.com/topfreegames/pitaya/v2/config"
-	"github.com/topfreegames/pitaya/v2/constants"
-	"github.com/topfreegames/pitaya/v2/logger"
-	"github.com/topfreegames/pitaya/v2/util"
-	clientv3 "go.etcd.io/etcd/client/v3"
-	logutil "go.etcd.io/etcd/client/pkg/v3/logutil"
-	"go.etcd.io/etcd/client/v3/namespace"
+
+	"github.com/coreos/etcd/clientv3"
+	"github.com/coreos/etcd/clientv3/namespace"
+	"github.com/topfreegames/pitaya/config"
+	"github.com/topfreegames/pitaya/constants"
+	"github.com/topfreegames/pitaya/logger"
+	"github.com/topfreegames/pitaya/util"
 )
 
 type etcdServiceDiscovery struct {
-	cli                    *clientv3.Client
-	syncServersInterval    time.Duration
-	heartbeatTTL           time.Duration
-	logHeartbeat           bool
-	lastHeartbeatTime      time.Time
-	leaseID                clientv3.LeaseID
-	mapByTypeLock          sync.RWMutex
-	serverMapByType        map[string]map[string]*Server
-	serverMapByID          sync.Map
-	etcdEndpoints          []string
-	etcdUser               string
-	etcdPass               string
-	etcdPrefix             string
-	etcdDialTimeout        time.Duration
-	running                bool
-	server                 *Server
-	stopChan               chan bool
-	stopLeaseChan          chan bool
-	lastSyncTime           time.Time
-	listeners              []SDListener
-	revokeTimeout          time.Duration
-	grantLeaseTimeout      time.Duration
-	grantLeaseMaxRetries   int
-	grantLeaseInterval     time.Duration
-	shutdownDelay          time.Duration
-	appDieChan             chan bool
-	serverTypesBlacklist   []string
-	syncServersParallelism int
-	syncServersRunning     chan bool
+	cli                  *clientv3.Client
+	config               *config.Config
+	syncServersInterval  time.Duration
+	heartbeatTTL         time.Duration
+	logHeartbeat         bool
+	lastHeartbeatTime    time.Time
+	leaseID              clientv3.LeaseID
+	mapByTypeLock        sync.RWMutex
+	serverMapByType      map[string]map[string]*Server
+	serverMapByID        sync.Map
+	etcdEndpoints        []string
+	etcdPrefix           string
+	etcdDialTimeout      time.Duration
+	running              bool
+	server               *Server
+	stopChan             chan bool
+	stopLeaseChan        chan bool
+	lastSyncTime         time.Time
+	listeners            []SDListener
+	revokeTimeout        time.Duration
+	grantLeaseTimeout    time.Duration
+	grantLeaseMaxRetries int
+	grantLeaseInterval   time.Duration
+	shutdownDelay        time.Duration
+	appDieChan           chan bool
 }
 
 // NewEtcdServiceDiscovery ctor
 func NewEtcdServiceDiscovery(
-	config config.EtcdServiceDiscoveryConfig,
+	config *config.Config,
 	server *Server,
 	appDieChan chan bool,
 	cli ...*clientv3.Client,
@@ -80,6 +76,7 @@ func NewEtcdServiceDiscovery(
 		client = cli[0]
 	}
 	sd := &etcdServiceDiscovery{
+		config:          config,
 		running:         false,
 		server:          server,
 		serverMapByType: make(map[string]map[string]*Server),
@@ -88,30 +85,25 @@ func NewEtcdServiceDiscovery(
 		stopLeaseChan:   make(chan bool),
 		appDieChan:      appDieChan,
 		cli:             client,
-		syncServersRunning: make(chan bool),
 	}
 
-	sd.configure(config)
+	sd.configure()
 
 	return sd, nil
 }
 
-func (sd *etcdServiceDiscovery) configure(config config.EtcdServiceDiscoveryConfig) {
-	sd.etcdEndpoints = config.Endpoints
-	sd.etcdUser = config.User
-	sd.etcdPass = config.Pass
-	sd.etcdDialTimeout = config.DialTimeout
-	sd.etcdPrefix = config.Prefix
-	sd.heartbeatTTL = config.Heartbeat.TTL
-	sd.logHeartbeat = config.Heartbeat.Log
-	sd.syncServersInterval = config.SyncServers.Interval
-	sd.revokeTimeout = config.Revoke.Timeout
-	sd.grantLeaseTimeout = config.GrantLease.Timeout
-	sd.grantLeaseMaxRetries = config.GrantLease.MaxRetries
-	sd.grantLeaseInterval = config.GrantLease.RetryInterval
-	sd.shutdownDelay = config.Shutdown.Delay
-	sd.serverTypesBlacklist = config.ServerTypesBlacklist
-	sd.syncServersParallelism = config.SyncServers.Parallelism
+func (sd *etcdServiceDiscovery) configure() {
+	sd.etcdEndpoints = sd.config.GetStringSlice("pitaya.cluster.sd.etcd.endpoints")
+	sd.etcdDialTimeout = sd.config.GetDuration("pitaya.cluster.sd.etcd.dialtimeout")
+	sd.etcdPrefix = sd.config.GetString("pitaya.cluster.sd.etcd.prefix")
+	sd.heartbeatTTL = sd.config.GetDuration("pitaya.cluster.sd.etcd.heartbeat.ttl")
+	sd.logHeartbeat = sd.config.GetBool("pitaya.cluster.sd.etcd.heartbeat.log")
+	sd.syncServersInterval = sd.config.GetDuration("pitaya.cluster.sd.etcd.syncservers.interval")
+	sd.revokeTimeout = sd.config.GetDuration("pitaya.cluster.sd.etcd.revoke.timeout")
+	sd.grantLeaseTimeout = sd.config.GetDuration("pitaya.cluster.sd.etcd.grantlease.timeout")
+	sd.grantLeaseMaxRetries = sd.config.GetInt("pitaya.cluster.sd.etcd.grantlease.maxretries")
+	sd.grantLeaseInterval = sd.config.GetDuration("pitaya.cluster.sd.etcd.grantlease.retryinterval")
+	sd.shutdownDelay = sd.config.GetDuration("pitaya.cluster.sd.etcd.shutdown.delay")
 }
 
 func (sd *etcdServiceDiscovery) watchLeaseChan(c <-chan *clientv3.LeaseKeepAliveResponse) {
@@ -122,11 +114,7 @@ func (sd *etcdServiceDiscovery) watchLeaseChan(c <-chan *clientv3.LeaseKeepAlive
 			return
 		case <-sd.stopLeaseChan:
 			return
-		case leaseKeepAliveResponse, ok := <-c:
-			if !ok {
-				logger.Log.Error("ETCD lease KeepAlive died, retrying in 10 seconds")
-				time.Sleep(10000 * time.Millisecond)
-			}
+		case leaseKeepAliveResponse := <-c:
 			if leaseKeepAliveResponse != nil {
 				if sd.logHeartbeat {
 					logger.Log.Debugf("sd: etcd lease %x renewed", leaseKeepAliveResponse.ID)
@@ -220,7 +208,8 @@ func (sd *etcdServiceDiscovery) bootstrapServer(server *Server) error {
 		return err
 	}
 
-	sd.SyncServers(true)
+	sd.SyncServers()
+
 	return nil
 }
 
@@ -277,9 +266,9 @@ func getKey(serverID, serverType string) string {
 	return fmt.Sprintf("servers/%s/%s", serverType, serverID)
 }
 
-func getServerFromEtcd(cli *clientv3.Client, serverType, serverID string) (*Server, error) {
+func (sd *etcdServiceDiscovery) getServerFromEtcd(serverType, serverID string) (*Server, error) {
 	svKey := getKey(serverID, serverType)
-	svEInfo, err := cli.Get(context.TODO(), svKey)
+	svEInfo, err := sd.cli.Get(context.TODO(), svKey)
 	if err != nil {
 		return nil, fmt.Errorf("error getting server: %s from etcd, error: %s", svKey, err.Error())
 	}
@@ -297,7 +286,7 @@ func (sd *etcdServiceDiscovery) GetServersByType(serverType string) (map[string]
 		// Create a new map to avoid concurrent read and write access to the
 		// map, this also prevents accidental changes to the list of servers
 		// kept by the service discovery.
-		ret := make(map[string]*Server,len(sd.serverMapByType[serverType]))
+		ret := make(map[string]*Server, len(sd.serverMapByType))
 		for k, v := range sd.serverMapByType[serverType] {
 			ret[k] = v
 		}
@@ -336,52 +325,29 @@ func (sd *etcdServiceDiscovery) GetServer(id string) (*Server, error) {
 	return nil, constants.ErrNoServerWithID
 }
 
-func (sd *etcdServiceDiscovery) InitETCDClient() error {
-	logger.Log.Infof("Initializing ETCD client")
+// Init starts the service discovery client
+func (sd *etcdServiceDiscovery) Init() error {
+	sd.running = true
 	var cli *clientv3.Client
 	var err error
-	etcdClientLogger, _ := logutil.CreateDefaultZapLogger(logutil.ConvertToZapLevel("error"))
-	config := clientv3.Config{
-		Endpoints:   sd.etcdEndpoints,
-		DialTimeout: sd.etcdDialTimeout,
-		Logger:      etcdClientLogger,
+	if sd.cli == nil {
+		cli, err = clientv3.New(clientv3.Config{
+			Endpoints:   sd.etcdEndpoints,
+			DialTimeout: sd.etcdDialTimeout,
+		})
+		if err != nil {
+			return err
+		}
+		sd.cli = cli
 	}
-	if sd.etcdUser != "" && sd.etcdPass != "" {
-		config.Username = sd.etcdUser
-		config.Password = sd.etcdPass
-	}
-	cli, err = clientv3.New(config)
-	if err != nil {
-		logger.Log.Errorf("error initializing etcd client: %s", err.Error())
-		return err
-	}
-	sd.cli = cli
 
 	// namespaced etcd :)
 	sd.cli.KV = namespace.NewKV(sd.cli.KV, sd.etcdPrefix)
 	sd.cli.Watcher = namespace.NewWatcher(sd.cli.Watcher, sd.etcdPrefix)
 	sd.cli.Lease = namespace.NewLease(sd.cli.Lease, sd.etcdPrefix)
-	return nil
-}
 
-// Init starts the service discovery client
-func (sd *etcdServiceDiscovery) Init() error {
-	sd.running = true
-	var err error
-
-	if sd.cli == nil {
-		err = sd.InitETCDClient()
-		if err != nil {
-			return err
-		}
-	} else {
-		sd.cli.KV = namespace.NewKV(sd.cli.KV, sd.etcdPrefix)
-		sd.cli.Watcher = namespace.NewWatcher(sd.cli.Watcher, sd.etcdPrefix)
-		sd.cli.Lease = namespace.NewLease(sd.cli.Lease, sd.etcdPrefix)
-	}
-	go sd.watchEtcdChanges()
-
-	if err = sd.bootstrap(); err != nil {
+	err = sd.bootstrap()
+	if err != nil {
 		return err
 	}
 
@@ -391,7 +357,7 @@ func (sd *etcdServiceDiscovery) Init() error {
 		for sd.running {
 			select {
 			case <-syncServersTicker.C:
-				err := sd.SyncServers(false)
+				err := sd.SyncServers()
 				if err != nil {
 					logger.Log.Errorf("error resyncing servers: %s", err.Error())
 				}
@@ -401,6 +367,7 @@ func (sd *etcdServiceDiscovery) Init() error {
 		}
 	}()
 
+	go sd.watchEtcdChanges()
 	return nil
 }
 
@@ -419,7 +386,6 @@ func parseServer(value []byte) (*Server, error) {
 	err := json.Unmarshal(value, &sv)
 	if err != nil {
 		logger.Log.Warnf("failed to load server %s, error: %s", sv, err.Error())
-		return nil, err
 	}
 	return sv, nil
 }
@@ -432,162 +398,43 @@ func (sd *etcdServiceDiscovery) printServers() {
 	}
 }
 
-// Struct that encapsulates a parallel/concurrent etcd get
-// it spawns goroutines and receives work requests through a channel
-type parallelGetterWork struct {
-	serverType string
-	serverID   string
-	payload    []byte
-}
-
-type parallelGetter struct {
-	cli         *clientv3.Client
-	numWorkers  int
-	wg          *sync.WaitGroup
-	resultMutex sync.Mutex
-	result      *[]*Server
-	workChan    chan parallelGetterWork
-}
-
-func newParallelGetter(cli *clientv3.Client, numWorkers int) parallelGetter {
-	if numWorkers <= 0 {
-		numWorkers = 10
-	}
-	p := parallelGetter{
-		cli:        cli,
-		numWorkers: numWorkers,
-		workChan:   make(chan parallelGetterWork),
-		wg:         new(sync.WaitGroup),
-		result:     new([]*Server),
-	}
-	p.start()
-	return p
-}
-
-func (p *parallelGetter) start() {
-	for i := 0; i < p.numWorkers; i++ {
-		go func() {
-			for work := range p.workChan {
-				logger.Log.Debugf("loading info from missing server: %s/%s", work.serverType, work.serverID)
-				var sv *Server
-				var err error
-				if work.payload == nil {
-					sv, err = getServerFromEtcd(p.cli, work.serverType, work.serverID)
-				} else {
-					sv, err = parseServer(work.payload)
-				}
-				if err != nil {
-					logger.Log.Errorf("Error parsing server from etcd: %s, error: %s", work.serverID, err.Error())
-					p.wg.Done()
-					continue
-				}
-
-				p.resultMutex.Lock()
-				*p.result = append(*p.result, sv)
-				p.resultMutex.Unlock()
-
-				p.wg.Done()
-			}
-		}()
-	}
-}
-
-func (p *parallelGetter) waitAndGetResult() []*Server {
-	p.wg.Wait()
-	close(p.workChan)
-	return *p.result
-}
-
-func (p *parallelGetter) addWorkWithPayload(serverType, serverID string, payload []byte) {
-	p.wg.Add(1)
-	p.workChan <- parallelGetterWork{
-		serverType: serverType,
-		serverID:   serverID,
-		payload:    payload,
-	}
-}
-
-func (p *parallelGetter) addWork(serverType, serverID string) {
-	p.wg.Add(1)
-	p.workChan <- parallelGetterWork{
-		serverType: serverType,
-		serverID:   serverID,
-	}
-}
-
 // SyncServers gets all servers from etcd
-func (sd *etcdServiceDiscovery) SyncServers(firstSync bool) error {
-	sd.syncServersRunning <- true
-	defer func() {
-		sd.syncServersRunning <- false
-	}()
-	start := time.Now()
-	var kvs *clientv3.GetResponse
-	var err error
-	if firstSync {
-		kvs, err = sd.cli.Get(
-			context.TODO(),
-			"servers/",
-			clientv3.WithPrefix(),
-		)
-	} else {
-		kvs, err = sd.cli.Get(
-			context.TODO(),
-			"servers/",
-			clientv3.WithPrefix(),
-			clientv3.WithKeysOnly(),
-		)
-	}
+func (sd *etcdServiceDiscovery) SyncServers() error {
+	keys, err := sd.cli.Get(
+		context.TODO(),
+		"servers/",
+		clientv3.WithPrefix(),
+		clientv3.WithKeysOnly(),
+	)
 	if err != nil {
-		logger.Log.Errorf("Error querying etcd server: %s", err.Error())
 		return err
 	}
 
 	// delete invalid servers (local ones that are not in etcd)
-	var allIds = make([]string, 0)
+	allIds := make([]string, 0)
 
-	// Spawn worker goroutines that will work in parallel
-	parallelGetter := newParallelGetter(sd.cli, sd.syncServersParallelism)
-
-	for _, kv := range kvs.Kvs {
+	// filter servers I need to grab info
+	for _, kv := range keys.Kvs {
 		svType, svID, err := parseEtcdKey(string(kv.Key))
 		if err != nil {
 			logger.Log.Warnf("failed to parse etcd key %s, error: %s", kv.Key, err.Error())
-			continue
 		}
-
-		// Check whether the server type is blacklisted or not
-		if sd.isServerTypeBlacklisted(svType) && svID != sd.server.ID {
-			logger.Log.Debug("ignoring blacklisted server type '%s'", svType)
-			continue
-		}
-
 		allIds = append(allIds, svID)
-
+		// TODO is this slow? if so we can paralellize
 		if _, ok := sd.serverMapByID.Load(svID); !ok {
-			// Add new work to the channel
-			if firstSync {
-				parallelGetter.addWorkWithPayload(svType, svID, kv.Value)
-			} else {
-				parallelGetter.addWork(svType, svID)
+			logger.Log.Debugf("loading info from missing server: %s/%s", svType, svID)
+			sv, err := sd.getServerFromEtcd(svType, svID)
+			if err != nil {
+				logger.Log.Errorf("error getting server from etcd: %s, error: %s", svID, err.Error())
+				continue
 			}
+			sd.addServer(sv)
 		}
 	}
-
-	// Wait until all goroutines are finished
-	servers := parallelGetter.waitAndGetResult()
-
-	for _, server := range servers {
-		logger.Log.Debugf("adding server %s", server)
-		sd.addServer(server)
-	}
-
 	sd.deleteLocalInvalidServers(allIds)
 
 	sd.printServers()
 	sd.lastSyncTime = time.Now()
-	elapsed := time.Since(start)
-	logger.Log.Infof("SyncServers took : %s to run", elapsed)
 	return nil
 }
 
@@ -642,46 +489,12 @@ func (sd *etcdServiceDiscovery) addServer(sv *Server) {
 
 func (sd *etcdServiceDiscovery) watchEtcdChanges() {
 	w := sd.cli.Watch(context.Background(), "servers/", clientv3.WithPrefix())
-	failedWatchAttempts := 0
+
 	go func(chn clientv3.WatchChan) {
 		for sd.running {
 			select {
-			// Block here if SyncServers() is running and consume the watcher channel after it's finished, to avoid conflicts
-			case syncServersState := <-sd.syncServersRunning:
-				for syncServersState {
-					syncServersState = <-sd.syncServersRunning
-				}
-			case wResp, ok := <-chn:
-				if wResp.Err() != nil {
-					logger.Log.Warnf("etcd watcher response error: %s", wResp.Err())
-					time.Sleep(100 * time.Millisecond)
-				}
-				if !ok {
-					logger.Log.Error("etcd watcher died, retrying to watch in 1 second")
-					failedWatchAttempts++
-					time.Sleep(1000 * time.Millisecond)
-					if failedWatchAttempts > 10 {
-						if err := sd.InitETCDClient(); err != nil {
-							failedWatchAttempts = 0
-							continue
-						}
-						chn = sd.cli.Watch(context.Background(), "servers/", clientv3.WithPrefix())
-						failedWatchAttempts = 0
-					}
-					continue
-				}
-				failedWatchAttempts = 0
+			case wResp := <-chn:
 				for _, ev := range wResp.Events {
-					svType, svID, err := parseEtcdKey(string(ev.Kv.Key))
-					if err != nil {
-						logger.Log.Warnf("failed to parse key from etcd: %s", ev.Kv.Key)
-						continue
-					}
-
-					if sd.isServerTypeBlacklisted(svType) && sd.server.ID != svID {
-						continue
-					}
-
 					switch ev.Type {
 					case clientv3.EventTypePut:
 						var sv *Server
@@ -690,29 +503,23 @@ func (sd *etcdServiceDiscovery) watchEtcdChanges() {
 							logger.Log.Errorf("Failed to parse server from etcd: %v", err)
 							continue
 						}
-
 						sd.addServer(sv)
-						logger.Log.Debugf("server %s added by watcher", ev.Kv.Key)
+						logger.Log.Debugf("server %s added", ev.Kv.Key)
 						sd.printServers()
 					case clientv3.EventTypeDelete:
+						_, svID, err := parseEtcdKey(string(ev.Kv.Key))
+						if err != nil {
+							logger.Log.Warnf("failed to parse key from etcd: %s", ev.Kv.Key)
+							continue
+						}
 						sd.deleteServer(svID)
-						logger.Log.Debugf("server %s deleted by watcher", svID)
+						logger.Log.Debugf("server %s deleted", svID)
 						sd.printServers()
 					}
 				}
 			case <-sd.stopChan:
 				return
 			}
-
 		}
 	}(w)
-}
-
-func (sd *etcdServiceDiscovery) isServerTypeBlacklisted(svType string) bool {
-	for _, blacklistedSv := range sd.serverTypesBlacklist {
-		if blacklistedSv == svType {
-			return true
-		}
-	}
-	return false
 }

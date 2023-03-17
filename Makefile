@@ -1,14 +1,16 @@
 TESTABLE_PACKAGES = `go list ./... | grep -v examples | grep -v constants | grep -v mocks | grep -v helpers | grep -v interfaces | grep -v protos | grep -v e2e | grep -v benchmark`
 
 setup: init-submodules
-	@go get ./...
+	@dep ensure
 
 init-submodules:
 	@git submodule init
 
 setup-ci:
 	@go get github.com/mattn/goveralls
+	@go get -u github.com/golang/dep/cmd/dep
 	@go get -u github.com/wadey/gocovmerge
+	@dep ensure
 
 setup-protobuf-macos:
 	@brew install protobuf
@@ -49,9 +51,6 @@ run-custom-metrics-example:
 
 run-rate-limiting-example:
 	@go run examples/demo/rate_limiting/main.go
-
-protos-compile-demo:
-	@protoc -I examples/demo/protos examples/demo/protos/*.proto --go_out=.
 
 protos-compile:
 	@cd benchmark/testdata && ./gen_proto.sh
@@ -141,26 +140,8 @@ test-coverage-func coverage-func: test-coverage merge-profiles
 	@echo "\033[1;34m=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\033[0m"
 	@go tool cover -func=coverage-all.out | egrep -v "100.0[%]"
 
-mocks: agent-mock session-mock networkentity-mock pitaya-mock serializer-mock metrics-mock acceptor-mock
-
-agent-mock:
-	@mockgen github.com/topfreegames/pitaya/v2/agent Agent,AgentFactory | sed 's/mock_agent/mocks/' > agent/mocks/agent.go
-
-session-mock:
-	@mockgen github.com/topfreegames/pitaya/v2/session Session,SessionPool | sed 's/mock_session/mocks/' > session/mocks/session.go
-
-networkentity-mock:
-	@mockgen github.com/topfreegames/pitaya/v2/networkentity NetworkEntity | sed 's/mock_networkentity/mocks/' > networkentity/mocks/networkentity.go
-
-pitaya-mock:
-	@mockgen github.com/topfreegames/pitaya/v2 Pitaya | sed 's/mock_v2/mocks/' > mocks/app.go
-
-metrics-mock:
-	@mockgen github.com/topfreegames/pitaya/v2/metrics Reporter | sed 's/mock_metrics/mocks/' > metrics/mocks/reporter.go
-	@mockgen github.com/topfreegames/pitaya/v2/metrics Client | sed 's/mock_metrics/mocks/' > metrics/mocks/statsd_reporter.go
-
 serializer-mock:
-	@mockgen github.com/topfreegames/pitaya/v2/serialize Serializer | sed 's/mock_serialize/mocks/' > serialize/mocks/serializer.go
+	@mockgen github.com/topfreegames/pitaya/serialize Serializer | sed 's/mock_serialize/mocks/' > serialize/mocks/serializer.go
 
 acceptor-mock:
-	@mockgen github.com/topfreegames/pitaya/v2/acceptor PlayerConn,Acceptor | sed 's/mock_acceptor/mocks/' > mocks/acceptor.go
+	@mockgen github.com/topfreegames/pitaya/acceptor Acceptor | sed 's/mock_acceptor/mocks/' > mocks/acceptor.go

@@ -29,8 +29,8 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
-	"github.com/topfreegames/pitaya/v2/config"
-	metricsmocks "github.com/topfreegames/pitaya/v2/metrics/mocks"
+	"github.com/topfreegames/pitaya/config"
+	metricsmocks "github.com/topfreegames/pitaya/metrics/mocks"
 )
 
 func TestNewStatsdReporter(t *testing.T) {
@@ -38,11 +38,11 @@ func TestNewStatsdReporter(t *testing.T) {
 	defer ctrl.Finish()
 	mockClient := metricsmocks.NewMockClient(ctrl)
 
-	cfg := config.NewDefaultStatsdConfig()
-	sr, err := NewStatsdReporter(*cfg, "svType", mockClient)
+	cfg := config.NewConfig()
+	sr, err := NewStatsdReporter(cfg, "svType", map[string]string{}, mockClient)
 	assert.NoError(t, err)
 	assert.Equal(t, mockClient, sr.client)
-	assert.Equal(t, float64(cfg.Statsd.Rate), sr.rate)
+	assert.Equal(t, float64(cfg.GetInt("pitaya.metrics.statsd.rate")), sr.rate)
 	assert.Equal(t, "svType", sr.serverType)
 }
 
@@ -51,11 +51,10 @@ func TestReportLatency(t *testing.T) {
 	defer ctrl.Finish()
 	mockClient := metricsmocks.NewMockClient(ctrl)
 
-	cfg := config.NewDefaultStatsdConfig()
-	cfg.ConstLabels = map[string]string{
+	cfg := config.NewConfig()
+	sr, err := NewStatsdReporter(cfg, "svType", map[string]string{
 		"defaultTag": "value",
-	}
-	sr, err := NewStatsdReporter(*cfg, "svType", mockClient)
+	}, mockClient)
 	assert.NoError(t, err)
 
 	expectedDuration, err := time.ParseDuration("200ms")
@@ -86,8 +85,8 @@ func TestReportLatencyError(t *testing.T) {
 	defer ctrl.Finish()
 	mockClient := metricsmocks.NewMockClient(ctrl)
 
-	cfg := config.NewDefaultStatsdConfig()
-	sr, err := NewStatsdReporter(*cfg, "svType", mockClient)
+	cfg := config.NewConfig()
+	sr, err := NewStatsdReporter(cfg, "svType", map[string]string{}, mockClient)
 	assert.NoError(t, err)
 
 	expectedError := errors.New("some error")
@@ -102,11 +101,10 @@ func TestReportCount(t *testing.T) {
 	defer ctrl.Finish()
 	mockClient := metricsmocks.NewMockClient(ctrl)
 
-	cfg := config.NewDefaultStatsdConfig()
-	cfg.ConstLabels = map[string]string{
+	cfg := config.NewConfig()
+	sr, err := NewStatsdReporter(cfg, "svType", map[string]string{
 		"defaultTag": "value",
-	}
-	sr, err := NewStatsdReporter(*cfg, "svType", mockClient)
+	}, mockClient)
 	assert.NoError(t, err)
 
 	expectedCount := 123
@@ -132,62 +130,13 @@ func TestReportCountError(t *testing.T) {
 	defer ctrl.Finish()
 	mockClient := metricsmocks.NewMockClient(ctrl)
 
-	cfg := config.NewDefaultStatsdConfig()
-	sr, err := NewStatsdReporter(*cfg, "svType", mockClient)
+	cfg := config.NewConfig()
+	sr, err := NewStatsdReporter(cfg, "svType", map[string]string{}, mockClient)
 	assert.NoError(t, err)
 
 	expectedError := errors.New("some error")
 	mockClient.EXPECT().Count(gomock.Any(), gomock.Any(), gomock.Any(), sr.rate).Return(expectedError)
 
 	err = sr.ReportCount("123", map[string]string{}, float64(123))
-	assert.Equal(t, expectedError, err)
-}
-
-func TestReportGauge(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	mockClient := metricsmocks.NewMockClient(ctrl)
-
-	cfg := config.NewDefaultStatsdConfig()
-	cfg.ConstLabels = map[string]string{
-		"defaultTag": "value",
-	}
-	sr, err := NewStatsdReporter(*cfg, "svType", mockClient)
-	assert.NoError(t, err)
-
-	expectedValue := 123.1
-	expectedMetric := uuid.New().String()
-	customTags := map[string]string{
-		"tag1:": uuid.New().String(),
-		"tag2:": uuid.New().String(),
-	}
-	mockClient.EXPECT().Gauge(expectedMetric, expectedValue, gomock.Any(), sr.rate).Do(func(n string, v float64, tags []string, r float64) {
-		for k, v := range customTags {
-			assert.Contains(t, tags, fmt.Sprintf("%s:%s", k, v))
-		}
-		assert.Contains(t, tags, fmt.Sprintf("serverType:%s", sr.serverType))
-		assert.Contains(t, tags, "defaultTag:value")
-	})
-
-	err = sr.ReportGauge(expectedMetric, customTags, float64(expectedValue))
-	assert.NoError(t, err)
-}
-
-func TestReportGaugeError(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	mockClient := metricsmocks.NewMockClient(ctrl)
-
-	cfg := config.NewDefaultStatsdConfig()
-	cfg.ConstLabels = map[string]string{
-		"defaultTag": "value",
-	}
-	sr, err := NewStatsdReporter(*cfg, "svType", mockClient)
-	assert.NoError(t, err)
-
-	expectedError := errors.New("some error")
-	mockClient.EXPECT().Gauge(gomock.Any(), gomock.Any(), gomock.Any(), sr.rate).Return(expectedError)
-
-	err = sr.ReportGauge("123", map[string]string{}, float64(123.1))
 	assert.Equal(t, expectedError, err)
 }

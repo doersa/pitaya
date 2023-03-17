@@ -25,18 +25,19 @@ import (
 	"fmt"
 	"time"
 
-	clientv3 "go.etcd.io/etcd/client/v3"
-	"go.etcd.io/etcd/client/v3/namespace"
-	"github.com/topfreegames/pitaya/v2/cluster"
-	"github.com/topfreegames/pitaya/v2/config"
-	"github.com/topfreegames/pitaya/v2/constants"
-	"github.com/topfreegames/pitaya/v2/logger"
-	"github.com/topfreegames/pitaya/v2/session"
+	"github.com/coreos/etcd/clientv3"
+	"github.com/coreos/etcd/clientv3/namespace"
+	"github.com/topfreegames/pitaya/cluster"
+	"github.com/topfreegames/pitaya/config"
+	"github.com/topfreegames/pitaya/constants"
+	"github.com/topfreegames/pitaya/logger"
+	"github.com/topfreegames/pitaya/session"
 )
 
 // ETCDBindingStorage module that uses etcd to keep in which frontend server each user is bound
 type ETCDBindingStorage struct {
 	Base
+	config          *config.Config
 	cli             *clientv3.Client
 	etcdEndpoints   []string
 	etcdPrefix      string
@@ -44,22 +45,25 @@ type ETCDBindingStorage struct {
 	leaseTTL        time.Duration
 	leaseID         clientv3.LeaseID
 	thisServer      *cluster.Server
-	sessionPool     session.SessionPool
 	stopChan        chan struct{}
 }
 
 // NewETCDBindingStorage returns a new instance of BindingStorage
-func NewETCDBindingStorage(server *cluster.Server, sessionPool session.SessionPool, conf config.ETCDBindingConfig) *ETCDBindingStorage {
+func NewETCDBindingStorage(server *cluster.Server, conf *config.Config) *ETCDBindingStorage {
 	b := &ETCDBindingStorage{
-		thisServer:  server,
-		sessionPool: sessionPool,
-		stopChan:    make(chan struct{}),
+		config:     conf,
+		thisServer: server,
+		stopChan:   make(chan struct{}),
 	}
-	b.etcdDialTimeout = conf.DialTimeout
-	b.etcdEndpoints = conf.Endpoints
-	b.etcdPrefix = conf.Prefix
-	b.leaseTTL = conf.LeaseTTL
+	b.configure()
 	return b
+}
+
+func (b *ETCDBindingStorage) configure() {
+	b.etcdDialTimeout = b.config.GetDuration("pitaya.modules.bindingstorage.etcd.dialtimeout")
+	b.etcdEndpoints = b.config.GetStringSlice("pitaya.modules.bindingstorage.etcd.endpoints")
+	b.etcdPrefix = b.config.GetString("pitaya.modules.bindingstorage.etcd.prefix")
+	b.leaseTTL = b.config.GetDuration("pitaya.modules.bindingstorage.etcd.leasettl")
 }
 
 func getUserBindingKey(uid, frontendType string) string {
@@ -92,7 +96,7 @@ func (b *ETCDBindingStorage) GetUserFrontendID(uid, frontendType string) (string
 }
 
 func (b *ETCDBindingStorage) setupOnSessionCloseCB() {
-	b.sessionPool.OnSessionClose(func(s session.Session) {
+	session.OnSessionClose(func(s *session.Session) {
 		if s.UID() != "" {
 			err := b.removeBinding(s.UID())
 			if err != nil {
@@ -103,7 +107,7 @@ func (b *ETCDBindingStorage) setupOnSessionCloseCB() {
 }
 
 func (b *ETCDBindingStorage) setupOnAfterSessionBindCB() {
-	b.sessionPool.OnAfterSessionBind(func(ctx context.Context, s session.Session) error {
+	session.OnAfterSessionBind(func(ctx context.Context, s *session.Session) error {
 		return b.PutBinding(s.UID())
 	})
 }

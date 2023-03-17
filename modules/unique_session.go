@@ -23,24 +23,22 @@ package modules
 import (
 	"context"
 
-	"github.com/topfreegames/pitaya/v2/cluster"
-	"github.com/topfreegames/pitaya/v2/session"
+	"github.com/topfreegames/pitaya/cluster"
+	"github.com/topfreegames/pitaya/session"
 )
 
 // UniqueSession module watches for sessions using the same UID and kicks them
 type UniqueSession struct {
 	Base
-	server      *cluster.Server
-	rpcClient   cluster.RPCClient
-	sessionPool session.SessionPool
+	server    *cluster.Server
+	rpcClient cluster.RPCClient
 }
 
 // NewUniqueSession creates a new unique session module
-func NewUniqueSession(server *cluster.Server, rpcServer cluster.RPCServer, rpcClient cluster.RPCClient, sessionPool session.SessionPool) *UniqueSession {
+func NewUniqueSession(server *cluster.Server, rpcServer cluster.RPCServer, rpcClient cluster.RPCClient) *UniqueSession {
 	return &UniqueSession{
-		server:      server,
-		rpcClient:   rpcClient,
-		sessionPool: sessionPool,
+		server:    server,
+		rpcClient: rpcClient,
 	}
 }
 
@@ -49,7 +47,7 @@ func (u *UniqueSession) OnUserBind(uid, fid string) {
 	if u.server.ID == fid {
 		return
 	}
-	oldSession := u.sessionPool.GetSessionByUID(uid)
+	oldSession := session.GetSessionByUID(uid)
 	if oldSession != nil {
 		// TODO: it would be nice to set this correctly
 		oldSession.Kick(context.Background())
@@ -58,8 +56,8 @@ func (u *UniqueSession) OnUserBind(uid, fid string) {
 
 // Init initializes the module
 func (u *UniqueSession) Init() error {
-	u.sessionPool.OnSessionBind(func(ctx context.Context, s session.Session) error {
-		oldSession := u.sessionPool.GetSessionByUID(s.UID())
+	session.OnSessionBind(func(ctx context.Context, s *session.Session) error {
+		oldSession := session.GetSessionByUID(s.UID())
 		if oldSession != nil {
 			return oldSession.Kick(ctx)
 		}

@@ -1,4 +1,8 @@
-package models
+package metrics
+
+import (
+	"github.com/topfreegames/pitaya/config"
+)
 
 // Summary defines a summary metric
 type Summary struct {
@@ -6,15 +10,6 @@ type Summary struct {
 	Name       string
 	Help       string
 	Objectives map[float64]float64
-	Labels     []string
-}
-
-// Histogram defines a histogram metric
-type Histogram struct {
-	Subsystem  string
-	Name       string
-	Help       string
-	Buckets    []float64
 	Labels     []string
 }
 
@@ -36,8 +31,19 @@ type Counter struct {
 
 // CustomMetricsSpec has all metrics specs
 type CustomMetricsSpec struct {
-	Summaries  []*Summary
-	Histograms []*Histogram
-	Gauges     []*Gauge
-	Counters   []*Counter
+	Summaries []*Summary
+	Gauges    []*Gauge
+	Counters  []*Counter
+}
+
+// NewCustomMetricsSpec returns a *CustomMetricsSpec by reading config key
+func NewCustomMetricsSpec(config *config.Config) (*CustomMetricsSpec, error) {
+	var spec CustomMetricsSpec
+
+	err := config.UnmarshalKey("pitaya.metrics.custom", &spec)
+	if err != nil {
+		return nil, err
+	}
+
+	return &spec, nil
 }

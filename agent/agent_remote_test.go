@@ -30,17 +30,16 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
-	"github.com/topfreegames/pitaya/v2/cluster"
-	clustermocks "github.com/topfreegames/pitaya/v2/cluster/mocks"
-	codecmocks "github.com/topfreegames/pitaya/v2/conn/codec/mocks"
-	"github.com/topfreegames/pitaya/v2/conn/message"
-	messagemocks "github.com/topfreegames/pitaya/v2/conn/message/mocks"
-	"github.com/topfreegames/pitaya/v2/conn/packet"
-	"github.com/topfreegames/pitaya/v2/constants"
-	"github.com/topfreegames/pitaya/v2/protos"
-	"github.com/topfreegames/pitaya/v2/route"
-	serializemocks "github.com/topfreegames/pitaya/v2/serialize/mocks"
-	"github.com/topfreegames/pitaya/v2/session"
+	"github.com/topfreegames/pitaya/cluster"
+	clustermocks "github.com/topfreegames/pitaya/cluster/mocks"
+	codecmocks "github.com/topfreegames/pitaya/conn/codec/mocks"
+	"github.com/topfreegames/pitaya/conn/message"
+	messagemocks "github.com/topfreegames/pitaya/conn/message/mocks"
+	"github.com/topfreegames/pitaya/conn/packet"
+	"github.com/topfreegames/pitaya/constants"
+	"github.com/topfreegames/pitaya/protos"
+	"github.com/topfreegames/pitaya/route"
+	serializemocks "github.com/topfreegames/pitaya/serialize/mocks"
 )
 
 type someStruct struct {
@@ -62,8 +61,7 @@ func TestNewRemote(t *testing.T) {
 	mockEncoder := codecmocks.NewMockPacketEncoder(ctrl)
 	mockMessageEncoder := messagemocks.NewMockEncoder(ctrl)
 
-	sessionPool := session.NewSessionPool()
-	remote, err := NewRemote(ss, reply, mockRPCClient, mockEncoder, mockSerializer, mockSD, frontendID, mockMessageEncoder, sessionPool)
+	remote, err := NewRemote(ss, reply, mockRPCClient, mockEncoder, mockSerializer, mockSD, frontendID, mockMessageEncoder)
 	assert.NoError(t, err)
 	assert.NotNil(t, remote)
 	assert.IsType(t, make(chan struct{}), remote.chDie)
@@ -74,21 +72,19 @@ func TestNewRemote(t *testing.T) {
 	assert.Equal(t, mockSD, remote.serviceDiscovery)
 	assert.Equal(t, frontendID, remote.frontendID)
 	assert.NotNil(t, remote.Session)
-	assert.False(t, remote.Session.GetIsFrontend())
+	assert.False(t, remote.Session.IsFrontend)
 }
 
 func TestNewRemoteFailsIfFailedToSetEncodedData(t *testing.T) {
 	ss := &protos.Session{Data: []byte("invalid")}
 
-	sessionPool := session.NewSessionPool()
-	remote, err := NewRemote(ss, "", nil, nil, nil, nil, "", nil, sessionPool)
+	remote, err := NewRemote(ss, "", nil, nil, nil, nil, "", nil)
 	assert.Equal(t, errors.New("invalid character 'i' looking for beginning of value").Error(), err.Error())
 	assert.Nil(t, remote)
 }
 
 func TestAgentRemoteClose(t *testing.T) {
-	sessionPool := session.NewSessionPool()
-	remote, err := NewRemote(nil, "", nil, nil, nil, nil, "", nil, sessionPool)
+	remote, err := NewRemote(nil, "", nil, nil, nil, nil, "", nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, remote)
 	err = remote.Close()
@@ -96,8 +92,7 @@ func TestAgentRemoteClose(t *testing.T) {
 }
 
 func TestAgentRemoteRemoteAddr(t *testing.T) {
-	sessionPool := session.NewSessionPool()
-	remote, err := NewRemote(nil, "", nil, nil, nil, nil, "", nil, sessionPool)
+	remote, err := NewRemote(nil, "", nil, nil, nil, nil, "", nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, remote)
 	addr := remote.RemoteAddr()
@@ -133,8 +128,7 @@ func TestAgentRemotePush(t *testing.T) {
 			ss := &protos.Session{Uid: table.uid}
 			mockSerializer := serializemocks.NewMockSerializer(ctrl)
 			mockSD := clustermocks.NewMockServiceDiscovery(ctrl)
-			sessionPool := session.NewSessionPool()
-			remote, err := NewRemote(ss, "", table.rpcClient, nil, mockSerializer, mockSD, fSvID, nil, sessionPool)
+			remote, err := NewRemote(ss, "", table.rpcClient, nil, mockSerializer, mockSD, fSvID, nil)
 			assert.NoError(t, err)
 			assert.NotNil(t, remote)
 
@@ -175,9 +169,7 @@ func TestKickRemote(t *testing.T) {
 	mockSD := clustermocks.NewMockServiceDiscovery(ctrl)
 	mockSerializer := serializemocks.NewMockSerializer(ctrl)
 	frontID := uuid.New().String()
-
-	sessionPool := session.NewSessionPool()
-	remote, err := NewRemote(ss, "", rpcClient, nil, mockSerializer, mockSD, frontID, nil, sessionPool)
+	remote, err := NewRemote(ss, "", rpcClient, nil, mockSerializer, mockSD, frontID, nil)
 	assert.NoError(t, err)
 
 	mockSD.EXPECT().GetServer(frontID)
@@ -220,8 +212,7 @@ func TestAgentRemoteResponseMID(t *testing.T) {
 			mockSerializer := serializemocks.NewMockSerializer(ctrl)
 			mockRPCClient := clustermocks.NewMockRPCClient(ctrl)
 			messageEncoder := message.NewMessagesEncoder(false)
-			sessionPool := session.NewSessionPool()
-			remote, err := NewRemote(ss, reply, mockRPCClient, mockEnconder, mockSerializer, nil, "", messageEncoder, sessionPool)
+			remote, err := NewRemote(ss, reply, mockRPCClient, mockEnconder, mockSerializer, nil, "", messageEncoder)
 			assert.NoError(t, err)
 			assert.NotNil(t, remote)
 
@@ -291,8 +282,7 @@ func TestAgentRemoteSendRequest(t *testing.T) {
 			mockSerializer := serializemocks.NewMockSerializer(ctrl)
 			mockRPCClient := clustermocks.NewMockRPCClient(ctrl)
 			mockMessageEncoder := messagemocks.NewMockEncoder(ctrl)
-			sessionPool := session.NewSessionPool()
-			remote, err := NewRemote(nil, "", mockRPCClient, nil, mockSerializer, mockSD, "", mockMessageEncoder, sessionPool)
+			remote, err := NewRemote(nil, "", mockRPCClient, nil, mockSerializer, mockSD, "", mockMessageEncoder)
 			assert.NoError(t, err)
 			assert.NotNil(t, remote)
 

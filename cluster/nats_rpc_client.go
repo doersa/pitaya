@@ -26,27 +26,26 @@ import (
 	"time"
 
 	"github.com/golang/protobuf/proto"
-	"github.com/google/uuid"
-	nats "github.com/nats-io/nats.go"
+	nats "github.com/nats-io/go-nats"
 	opentracing "github.com/opentracing/opentracing-go"
-	"github.com/topfreegames/pitaya/v2/config"
-	"github.com/topfreegames/pitaya/v2/conn/message"
-	"github.com/topfreegames/pitaya/v2/constants"
-	pcontext "github.com/topfreegames/pitaya/v2/context"
-	"github.com/topfreegames/pitaya/v2/errors"
-	"github.com/topfreegames/pitaya/v2/logger"
-	"github.com/topfreegames/pitaya/v2/metrics"
-	"github.com/topfreegames/pitaya/v2/protos"
-	"github.com/topfreegames/pitaya/v2/route"
-	"github.com/topfreegames/pitaya/v2/session"
-	"github.com/topfreegames/pitaya/v2/tracing"
+	"github.com/topfreegames/pitaya/config"
+	"github.com/topfreegames/pitaya/conn/message"
+	"github.com/topfreegames/pitaya/constants"
+	pcontext "github.com/topfreegames/pitaya/context"
+	"github.com/topfreegames/pitaya/errors"
+	"github.com/topfreegames/pitaya/logger"
+	"github.com/topfreegames/pitaya/metrics"
+	"github.com/topfreegames/pitaya/protos"
+	"github.com/topfreegames/pitaya/route"
+	"github.com/topfreegames/pitaya/session"
+	"github.com/topfreegames/pitaya/tracing"
 )
 
 // NatsRPCClient struct
 type NatsRPCClient struct {
+	config                 *config.Config
 	conn                   *nats.Conn
 	connString             string
-	connectionTimeout      time.Duration
 	maxReconnectionRetries int
 	reqTimeout             time.Duration
 	running                bool
@@ -57,39 +56,38 @@ type NatsRPCClient struct {
 
 // NewNatsRPCClient ctor
 func NewNatsRPCClient(
-	config config.NatsRPCClientConfig,
+	config *config.Config,
 	server *Server,
 	metricsReporters []metrics.Reporter,
 	appDieChan chan bool,
 ) (*NatsRPCClient, error) {
 	ns := &NatsRPCClient{
-		server:            server,
-		running:           false,
-		metricsReporters:  metricsReporters,
-		appDieChan:        appDieChan,
-		connectionTimeout: nats.DefaultTimeout,
+		config:           config,
+		server:           server,
+		running:          false,
+		metricsReporters: metricsReporters,
+		appDieChan:       appDieChan,
 	}
-	if err := ns.configure(config); err != nil {
+	if err := ns.configure(); err != nil {
 		return nil, err
 	}
 	return ns, nil
 }
 
-func (ns *NatsRPCClient) configure(config config.NatsRPCClientConfig) error {
-	ns.connString = config.Connect
+func (ns *NatsRPCClient) configure() error {
+	ns.connString = ns.config.GetString("pitaya.cluster.rpc.client.nats.connect")
 	if ns.connString == "" {
 		return constants.ErrNoNatsConnectionString
 	}
-	ns.connectionTimeout = config.ConnectionTimeout
-	ns.maxReconnectionRetries = config.MaxReconnectionRetries
-	ns.reqTimeout = config.RequestTimeout
+	ns.maxReconnectionRetries = ns.config.GetInt("pitaya.cluster.rpc.client.nats.maxreconnectionretries")
+	ns.reqTimeout = ns.config.GetDuration("pitaya.cluster.rpc.client.nats.requesttimeout")
 	if ns.reqTimeout == 0 {
 		return constants.ErrNatsNoRequestTimeout
 	}
 	return nil
 }
 
-// BroadcastSessionBind sends the binding information to other servers that may be interested in this info
+// BroadcastSessionBind sends the binding information to other servers that may br interested in this info
 func (ns *NatsRPCClient) BroadcastSessionBind(uid string) error {
 	msg := &protos.BindMsg{
 		Uid: uid,
@@ -130,12 +128,12 @@ func (ns *NatsRPCClient) SendKick(userID string, serverType string, kick *protos
 	return ns.Send(topic, msg)
 }
 
-// Call calls a method remotely
+// Call calls a method remotelly
 func (ns *NatsRPCClient) Call(
 	ctx context.Context,
 	rpcType protos.RPCType,
 	route *route.Route,
-	session session.Session,
+	session *session.Session,
 	msg *message.Message,
 	server *Server,
 ) (*protos.Response, error) {
@@ -149,28 +147,13 @@ func (ns *NatsRPCClient) Call(
 		"peer.serverType": server.Type,
 		"peer.id":         server.ID,
 	}
-	ctx = tracing.StartSpan(ctx, "NATS RPC Call", tags, parent)
+	ctx = tracing.StartSpan(ctx, "RPC Call", tags, parent)
 	defer tracing.FinishSpan(ctx, err)
 
 	if !ns.running {
 		err = constants.ErrRPCClientNotInitialized
 		return nil, err
 	}
-
-	if session != nil {
-		requestID := uuid.New().String()
-		requestInfo := ""
-		if route != nil {
-			requestInfo = route.Method
-		}
-
-		session.SetRequestInFlight(requestID, requestInfo, true)
-		defer session.SetRequestInFlight(requestID, "", false)
-	}
-
-	logger.Log.Debugf("[rpc_client] sending remote nats request for route %s with timeout of %s", route, ns.reqTimeout)
-
-	ctx = pcontext.AddToPropagateCtx(ctx, constants.RequestTimeout, ns.reqTimeout.String())
 	req, err := buildRequest(ctx, rpcType, route, session, msg, ns.server)
 	if err != nil {
 		return nil, err
@@ -219,13 +202,7 @@ func (ns *NatsRPCClient) Call(
 // Init inits nats rpc client
 func (ns *NatsRPCClient) Init() error {
 	ns.running = true
-	logger.Log.Debugf("connecting to nats (client) with timeout of %s", ns.connectionTimeout)
-	conn, err := setupNatsConn(
-		ns.connString,
-		ns.appDieChan,
-		nats.MaxReconnects(ns.maxReconnectionRetries),
-		nats.Timeout(ns.connectionTimeout),
-	)
+	conn, err := setupNatsConn(ns.connString, ns.appDieChan, nats.MaxReconnects(ns.maxReconnectionRetries))
 	if err != nil {
 		return err
 	}
