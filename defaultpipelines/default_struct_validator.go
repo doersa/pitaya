@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	validator "github.com/go-playground/validator/v10"
+	validator "gopkg.in/go-playground/validator.v9"
 )
 
 // DefaultValidator is the default arguments validator for handlers
@@ -18,17 +18,17 @@ type DefaultValidator struct {
 // based on the struct tags the parameter has.
 // This function has the pipeline.Handler signature so
 // it is possible to use it as a pipeline function
-func (v *DefaultValidator) Validate(ctx context.Context, in interface{}) (context.Context, interface{}, error) {
+func (v *DefaultValidator) Validate(ctx context.Context, in interface{}) (interface{}, error) {
 	if in == nil {
-		return ctx, in, nil
+		return in, nil
 	}
 
 	v.lazyinit()
 	if err := v.validate.Struct(in); err != nil {
-		return ctx, nil, err
+		return nil, err
 	}
 
-	return ctx, in, nil
+	return in, nil
 }
 
 func (v *DefaultValidator) lazyinit() {

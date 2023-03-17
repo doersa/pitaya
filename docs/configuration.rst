@@ -27,14 +27,6 @@ These configuration values configure service discovery for the default etcd serv
     - localhost:2379
     - string
     - List of comma separated etcd endpoints
-  * - pitaya.cluster.sd.etcd.user
-    - 
-    - string
-    - Username to connect to etcd
-  * - pitaya.cluster.sd.etcd.pass
-    - 
-    - string
-    - Password to connect to etcd
   * - pitaya.cluster.sd.etcd.heartbeat.ttl
     - 60s
     - time.Time
@@ -71,14 +63,6 @@ These configuration values configure service discovery for the default etcd serv
     - 10ms
     - time.Duration
     - Time to wait to shutdown after deregistering from service discovery
-  * - pitaya.cluster.sd.etcd.servertypeblacklist
-    - nil
-    - []string
-    - A list of server types that should be ignored by the service discovery
-  * - pitaya.cluster.sd.etcd.syncservers.parallelism
-    - 10
-    - int
-    - The number of goroutines that should be used while getting server information on etcd initialization
 
 RPC Service
 ===========
@@ -94,34 +78,26 @@ The configurations only need to be set if the RPC Service is enabled with the gi
     - Default value
     - Type
     - Description
-  * - pitaya.cluster.rpc.server.nats.buffer.messages
+  * - pitaya.buffer.cluster.rpc.server.nats.messages
     - 75
     - int
     - Size of the buffer that for the nats RPC server accepts before starting to drop incoming messages
-  * - pitaya.cluster.rpc.server.nats.buffer.push
+  * - pitaya.buffer.cluster.rpc.server.nats.push
     - 100
     - int
     - Size of the buffer that the nats RPC server creates for push messages
-  * - pitaya.cluster.rpc.client.grpc.dialtimeout
-    - 5s
-    - time.Time
-    - Timeout for the gRPC client to establish the connection
-  * - pitaya.cluster.rpc.client.grpc.lazyconnection
-    - false
-    - bool
-    - Whether the gRPC client should use a lazy connection, that is, connect only when a request is made to that server
   * - pitaya.cluster.rpc.client.grpc.requesttimeout
     - 5s
     - time.Time
     - Request timeout for RPC calls with the gRPC client
+  * - pitaya.cluster.rpc.client.grpc.dialtimeout
+    - 5s
+    - time.Tim
+    - Timeout for the gRPC client to establish the connection
   * - pitaya.cluster.rpc.client.nats.connect
     - nats://localhost:4222
     - string
     - Nats address for the client
-  * - pitaya.cluster.rpc.client.nats.connectiontimeout
-    - 5s
-    - time.Duration
-    - Timeout for the nats client to establish the connection
   * - pitaya.cluster.rpc.client.nats.requesttimeout
     - 5s
     - time.Time
@@ -134,10 +110,6 @@ The configurations only need to be set if the RPC Service is enabled with the gi
     - nats://localhost:4222
     - string
     - Nats address for the server
-  * - pitaya.cluster.rpc.server.nats.connectiontimeout
-    - 5s
-    - time.Duration
-    - Timeout for the nats server to establish the connection
   * - pitaya.cluster.rpc.server.nats.maxreconnectionretries
     - 15
     - int
@@ -146,7 +118,7 @@ The configurations only need to be set if the RPC Service is enabled with the gi
     - 3434
     - int
     - The port that the gRPC server listens to
-  * - pitaya.cluster.rpc.server.nats.services
+  * - pitaya.concurrency.remote.service
     - 30
     - int
     - Number of goroutines processing messages at the remote service for the nats RPC service
@@ -268,11 +240,11 @@ Metrics Reporting
     - map[string]string{}
     - map[string]string
     - Constant tags to be added to reported metrics
-  * - pitaya.metrics.prometheus.additionalTags
+  * - pitaya.metrics.additionalTags
     - map[string]string{}
     - map[string]string
     - Additional tags to reported metrics, the map is from tag to default value
-  * - pitaya.metrics.period
+  * - pitaya.metrics.periodicMetrics.period
     - 15s
     - string
     - Period that system metrics will be reported

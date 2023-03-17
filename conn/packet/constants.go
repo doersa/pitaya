@@ -45,6 +45,3 @@ const (
 
 // ErrWrongPomeloPacketType represents a wrong packet type.
 var ErrWrongPomeloPacketType = errors.New("wrong packet type")
-
-// ErrInvalidPomeloHeader represents an invalid header
-var ErrInvalidPomeloHeader = errors.New("invalid header")

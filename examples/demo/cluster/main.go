@@ -7,43 +7,41 @@ import (
 
 	"strings"
 
-	"github.com/topfreegames/pitaya/v2"
-	"github.com/topfreegames/pitaya/v2/acceptor"
-	"github.com/topfreegames/pitaya/v2/cluster"
-	"github.com/topfreegames/pitaya/v2/component"
-	"github.com/topfreegames/pitaya/v2/config"
-	"github.com/topfreegames/pitaya/v2/examples/demo/cluster/services"
-	"github.com/topfreegames/pitaya/v2/groups"
-	"github.com/topfreegames/pitaya/v2/route"
+	"github.com/topfreegames/pitaya"
+	"github.com/topfreegames/pitaya/acceptor"
+	"github.com/topfreegames/pitaya/cluster"
+	"github.com/topfreegames/pitaya/component"
+	"github.com/topfreegames/pitaya/examples/demo/cluster/services"
+	"github.com/topfreegames/pitaya/route"
+	"github.com/topfreegames/pitaya/serialize/json"
 )
 
-var app pitaya.Pitaya
-
 func configureBackend() {
-	room := services.NewRoom(app)
-	app.Register(room,
+	room := services.NewRoom()
+	pitaya.Register(room,
 		component.WithName("room"),
 		component.WithNameFunc(strings.ToLower),
 	)
 
-	app.RegisterRemote(room,
+	pitaya.RegisterRemote(room,
 		component.WithName("room"),
 		component.WithNameFunc(strings.ToLower),
 	)
 }
 
 func configureFrontend(port int) {
-	app.Register(services.NewConnector(app),
+	tcp := acceptor.NewTCPAcceptor(fmt.Sprintf(":%d", port))
+
+	pitaya.Register(&services.Connector{},
 		component.WithName("connector"),
 		component.WithNameFunc(strings.ToLower),
 	)
-
-	app.RegisterRemote(services.NewConnectorRemote(app),
+	pitaya.RegisterRemote(&services.ConnectorRemote{},
 		component.WithName("connectorremote"),
 		component.WithNameFunc(strings.ToLower),
 	)
 
-	err := app.AddRoute("room", func(
+	err := pitaya.AddRoute("room", func(
 		ctx context.Context,
 		route *route.Route,
 		payload []byte,
@@ -60,7 +58,7 @@ func configureFrontend(port int) {
 		fmt.Printf("error adding route %s\n", err.Error())
 	}
 
-	err = app.SetDictionary(map[string]uint16{
+	err = pitaya.SetDictionary(map[string]uint16{
 		"connector.getsessiondata": 1,
 		"connector.setsessiondata": 2,
 		"room.room.getsessiondata": 3,
@@ -71,6 +69,8 @@ func configureFrontend(port int) {
 	if err != nil {
 		fmt.Printf("error setting route dictionary %s\n", err.Error())
 	}
+
+	pitaya.AddAcceptor(tcp)
 }
 
 func main() {
@@ -80,17 +80,9 @@ func main() {
 
 	flag.Parse()
 
-	builder := pitaya.NewDefaultBuilder(*isFrontend, *svType, pitaya.Cluster, map[string]string{}, *config.NewDefaultBuilderConfig())
-	if *isFrontend {
-		tcp := acceptor.NewTCPAcceptor(fmt.Sprintf(":%d", *port))
-		builder.AddAcceptor(tcp)
-	}
-	builder.Groups = groups.NewMemoryGroupService(*config.NewDefaultMemoryGroupConfig())
-	app = builder.Build()
+	defer pitaya.Shutdown()
 
-	//TODO: Oelze pitaya.SetSerializer(protobuf.NewSerializer())
-
-	defer app.Shutdown()
+	pitaya.SetSerializer(json.NewSerializer())
 
 	if !*isFrontend {
 		configureBackend()
@@ -98,5 +90,6 @@ func main() {
 		configureFrontend(*port)
 	}
 
-	app.Start()
+	pitaya.Configure(*isFrontend, *svType, pitaya.Cluster, map[string]string{})
+	pitaya.Start()
 }

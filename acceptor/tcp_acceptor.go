@@ -22,58 +22,20 @@ package acceptor
 
 import (
 	"crypto/tls"
-	"io"
-	"io/ioutil"
 	"net"
 
-	"github.com/mailgun/proxyproto"
-	"github.com/topfreegames/pitaya/v2/conn/codec"
-	"github.com/topfreegames/pitaya/v2/constants"
-	"github.com/topfreegames/pitaya/v2/logger"
+	"github.com/topfreegames/pitaya/constants"
+	"github.com/topfreegames/pitaya/logger"
 )
 
 // TCPAcceptor struct
 type TCPAcceptor struct {
-	addr          string
-	connChan      chan PlayerConn
-	listener      net.Listener
-	running       bool
-	certFile      string
-	keyFile       string
-	proxyProtocol bool
-}
-
-type tcpPlayerConn struct {
-	net.Conn
-	remoteAddr net.Addr
-}
-
-func (t *tcpPlayerConn) RemoteAddr() net.Addr {
-	return t.remoteAddr
-}
-
-// GetNextMessage reads the next message available in the stream
-func (t *tcpPlayerConn) GetNextMessage() (b []byte, err error) {
-	header, err := ioutil.ReadAll(io.LimitReader(t.Conn, codec.HeadLength))
-	if err != nil {
-		return nil, err
-	}
-	// if the header has no data, we can consider it as a closed connection
-	if len(header) == 0 {
-		return nil, constants.ErrConnectionClosed
-	}
-	msgSize, _, err := codec.ParseHeader(header)
-	if err != nil {
-		return nil, err
-	}
-	msgData, err := ioutil.ReadAll(io.LimitReader(t.Conn, int64(msgSize)))
-	if err != nil {
-		return nil, err
-	}
-	if len(msgData) < msgSize {
-		return nil, constants.ErrReceivedMsgSmallerThanExpected
-	}
-	return append(header, msgData...), nil
+	addr     string
+	connChan chan net.Conn
+	listener net.Listener
+	running  bool
+	certFile string
+	keyFile  string
 }
 
 // NewTCPAcceptor creates a new instance of tcp acceptor
@@ -88,12 +50,11 @@ func NewTCPAcceptor(addr string, certs ...string) *TCPAcceptor {
 	}
 
 	return &TCPAcceptor{
-		addr:          addr,
-		connChan:      make(chan PlayerConn),
-		running:       false,
-		certFile:      certFile,
-		keyFile:       keyFile,
-		proxyProtocol: false,
+		addr:     addr,
+		connChan: make(chan net.Conn),
+		running:  false,
+		certFile: certFile,
+		keyFile:  keyFile,
 	}
 }
 
@@ -106,7 +67,7 @@ func (a *TCPAcceptor) GetAddr() string {
 }
 
 // GetConnChan gets a connection channel
-func (a *TCPAcceptor) GetConnChan() chan PlayerConn {
+func (a *TCPAcceptor) GetConnChan() chan net.Conn {
 	return a.connChan
 }
 
@@ -146,16 +107,9 @@ func (a *TCPAcceptor) ListenAndServeTLS(cert, key string) {
 	tlsCfg := &tls.Config{Certificates: []tls.Certificate{crt}}
 
 	listener, err := tls.Listen("tcp", a.addr, tlsCfg)
-	if err != nil {
-		logger.Log.Fatalf("Failed to listen: %s", err.Error())
-	}
 	a.listener = listener
 	a.running = true
 	a.serve()
-}
-
-func (a *TCPAcceptor) EnableProxyProtocol() {
-	a.proxyProtocol = true
 }
 
 func (a *TCPAcceptor) serve() {
@@ -166,27 +120,7 @@ func (a *TCPAcceptor) serve() {
 			logger.Log.Errorf("Failed to accept TCP connection: %s", err.Error())
 			continue
 		}
-		var remoteAddr net.Addr
-		if a.proxyProtocol == true {
-			h, err := proxyproto.ReadHeader(conn)
-			if err != nil {
-				logger.Log.Errorf("Failed to read Proxy Protocol TCP header: %s", err.Error())
-				conn.Close()
-				continue
-			} else if h.Source == nil {
-				conn.Close()
-				continue
-			} else {
-				remoteAddr = h.Source
-			}
-		} else {
 
-			remoteAddr = conn.RemoteAddr()
-
-		}
-		a.connChan <- &tcpPlayerConn{
-			Conn:       conn,
-			remoteAddr: remoteAddr,
-		}
+		a.connChan <- conn
 	}
 }

@@ -24,28 +24,24 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/nats-io/nuid"
 	"os"
 	"reflect"
 	"runtime/debug"
-	"strconv"
 
-	"github.com/topfreegames/pitaya/v2/conn/message"
-	"github.com/topfreegames/pitaya/v2/constants"
-	pcontext "github.com/topfreegames/pitaya/v2/context"
-	e "github.com/topfreegames/pitaya/v2/errors"
-	"github.com/topfreegames/pitaya/v2/logger"
-	"github.com/topfreegames/pitaya/v2/logger/interfaces"
-	"github.com/topfreegames/pitaya/v2/protos"
-	"github.com/topfreegames/pitaya/v2/serialize"
-	"github.com/topfreegames/pitaya/v2/serialize/json"
-	"github.com/topfreegames/pitaya/v2/serialize/protobuf"
-	"github.com/topfreegames/pitaya/v2/tracing"
-
+	"github.com/google/uuid"
 	opentracing "github.com/opentracing/opentracing-go"
+	"github.com/sirupsen/logrus"
+	"github.com/topfreegames/pitaya/conn/message"
+	"github.com/topfreegames/pitaya/constants"
+	pcontext "github.com/topfreegames/pitaya/context"
+	e "github.com/topfreegames/pitaya/errors"
+	"github.com/topfreegames/pitaya/logger"
+	"github.com/topfreegames/pitaya/protos"
+	"github.com/topfreegames/pitaya/serialize"
+	"github.com/topfreegames/pitaya/tracing"
 )
 
-func getLoggerFromArgs(args []reflect.Value) interfaces.Logger {
+func getLoggerFromArgs(args []reflect.Value) logger.Logger {
 	for _, a := range args {
 		if !a.IsValid() {
 			continue
@@ -53,7 +49,7 @@ func getLoggerFromArgs(args []reflect.Value) interfaces.Logger {
 		if ctx, ok := a.Interface().(context.Context); ok {
 			logVal := ctx.Value(constants.LoggerCtxKey)
 			if logVal != nil {
-				log := logVal.(interfaces.Logger)
+				log := logVal.(logger.Logger)
 				return log
 			}
 		}
@@ -66,11 +62,9 @@ func Pcall(method reflect.Method, args []reflect.Value) (rets interface{}, err e
 	defer func() {
 		if rec := recover(); rec != nil {
 			// Try to use logger from context here to help trace error cause
-			stackTrace := debug.Stack()
-			stackTraceAsRawStringLiteral := strconv.Quote(string(stackTrace))
 			log := getLoggerFromArgs(args)
-			log.Errorf("panic - pitaya/dispatch: methodName=%s panicData=%v stackTrace=%s", method.Name, rec, stackTraceAsRawStringLiteral)
-
+			log.Errorf("panic - pitaya/dispatch: %s: %v", method.Name, rec)
+			log.Debugf("%s", debug.Stack())
 			if s, ok := rec.(string); ok {
 				err = errors.New(s)
 			} else {
@@ -122,20 +116,6 @@ func FileExists(filename string) bool {
 	return err == nil || os.IsExist(err)
 }
 
-// GetErrorFromPayload gets the error from payload
-func GetErrorFromPayload(serializer serialize.Serializer, payload []byte) error {
-	err := &e.Error{Code: e.ErrUnknownCode}
-	switch serializer.(type) {
-	case *json.Serializer:
-		_ = serializer.Unmarshal(payload, err)
-	case *protobuf.Serializer:
-		pErr := &protos.Error{Code: e.ErrUnknownCode}
-		_ = serializer.Unmarshal(payload, pErr)
-		err = &e.Error{Code: pErr.Code, Message: pErr.Msg, Metadata: pErr.Metadata}
-	}
-	return err
-}
-
 // GetErrorPayload creates and serializes an error payload
 func GetErrorPayload(serializer serialize.Serializer, err error) ([]byte, error) {
 	code := e.ErrUnknownCode
@@ -171,21 +151,26 @@ func ConvertProtoToMessageType(protoMsgType protos.MsgType) message.Type {
 // If using logrus, userId, route and requestId will be added as fields.
 // Otherwise the pitaya logger will be used as it is.
 func CtxWithDefaultLogger(ctx context.Context, route, userID string) context.Context {
-	requestID := pcontext.GetFromPropagateCtx(ctx, constants.RequestIDKey)
-	if rID, ok := requestID.(string); ok {
-		if rID == "" {
-			requestID = nuid.New()
+	var defaultLogger logger.Logger
+	logrusLogger, ok := logger.Log.(logrus.FieldLogger)
+	if ok {
+		requestID := pcontext.GetFromPropagateCtx(ctx, constants.RequestIDKey)
+		if rID, ok := requestID.(string); ok {
+			if rID == "" {
+				requestID = uuid.New()
+			}
+		} else {
+			requestID = uuid.New()
 		}
+		defaultLogger = logrusLogger.WithFields(
+			logrus.Fields{
+				"route":     route,
+				"requestId": requestID,
+				"userId":    userID,
+			})
 	} else {
-		requestID = nuid.New()
+		defaultLogger = logger.Log
 	}
-	defaultLogger := logger.Log.WithFields(
-		map[string]interface{}{
-			"route":     route,
-			"requestId": requestID,
-			"userId":    userID,
-		},
-	)
 
 	return context.WithValue(ctx, constants.LoggerCtxKey, defaultLogger)
 }

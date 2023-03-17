@@ -46,9 +46,9 @@ func TestDefaultValidator(t *testing.T) {
 		t.Run(tname, func(t *testing.T) {
 			var err error
 			if tbl.s == nil {
-				_, _, err = validator.Validate(context.Background(), nil)
+				_, err = validator.Validate(context.Background(), nil)
 			} else {
-				_, _, err = validator.Validate(context.Background(), tbl.s)
+				_, err = validator.Validate(context.Background(), tbl.s)
 			}
 
 			if tbl.shouldFail {

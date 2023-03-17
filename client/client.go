@@ -27,23 +27,33 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/topfreegames/pitaya/v2/acceptor"
-
-	"github.com/gorilla/websocket"
 	"github.com/sirupsen/logrus"
-	"github.com/topfreegames/pitaya/v2"
-	"github.com/topfreegames/pitaya/v2/conn/codec"
-	"github.com/topfreegames/pitaya/v2/conn/message"
-	"github.com/topfreegames/pitaya/v2/conn/packet"
-	"github.com/topfreegames/pitaya/v2/logger"
-	logruswrapper "github.com/topfreegames/pitaya/v2/logger/logrus"
-	"github.com/topfreegames/pitaya/v2/session"
-	"github.com/topfreegames/pitaya/v2/util/compression"
+	"github.com/topfreegames/pitaya"
+	"github.com/topfreegames/pitaya/conn/codec"
+	"github.com/topfreegames/pitaya/conn/message"
+	"github.com/topfreegames/pitaya/conn/packet"
+	"github.com/topfreegames/pitaya/logger"
+	"github.com/topfreegames/pitaya/util/compression"
+)
+
+var (
+	handshakeBuffer = `
+{
+	"sys": {
+		"platform": "mac",
+		"libVersion": "0.3.5-release",
+		"clientBuildNumber":"20",
+		"clientVersion":"2.1"
+	},
+	"user": {
+		"age": 30
+	}
+}
+`
 )
 
 // HandshakeSys struct
@@ -66,20 +76,19 @@ type pendingRequest struct {
 
 // Client struct
 type Client struct {
-	conn                net.Conn
-	Connected           bool
-	packetEncoder       codec.PacketEncoder
-	packetDecoder       codec.PacketDecoder
-	packetChan          chan *packet.Packet
-	IncomingMsgChan     chan *message.Message
-	pendingChan         chan bool
-	pendingRequests     map[uint]*pendingRequest
-	pendingReqMutex     sync.Mutex
-	requestTimeout      time.Duration
-	closeChan           chan struct{}
-	nextID              uint32
-	messageEncoder      message.Encoder
-	clientHandshakeData *session.HandshakeData
+	conn            net.Conn
+	Connected       bool
+	packetEncoder   codec.PacketEncoder
+	packetDecoder   codec.PacketDecoder
+	packetChan      chan *packet.Packet
+	IncomingMsgChan chan *message.Message
+	pendingChan     chan bool
+	pendingRequests map[uint]*pendingRequest
+	pendingReqMutex sync.Mutex
+	requestTimeout  time.Duration
+	closeChan       chan struct{}
+	nextID          uint32
+	messageEncoder  message.Encoder
 }
 
 // MsgChannel return the incoming message channel
@@ -98,7 +107,7 @@ func New(logLevel logrus.Level, requestTimeout ...time.Duration) *Client {
 	l.Formatter = &logrus.TextFormatter{}
 	l.SetLevel(logLevel)
 
-	logger.Log = logruswrapper.NewWithFieldLogger(l)
+	logger.Log = l
 
 	reqTimeout := 5 * time.Second
 	if len(requestTimeout) > 0 {
@@ -115,37 +124,15 @@ func New(logLevel logrus.Level, requestTimeout ...time.Duration) *Client {
 		// 30 here is the limit of inflight messages
 		// TODO this should probably be configurable
 		pendingChan:    make(chan bool, 30),
-		messageEncoder: message.NewMessagesEncoder(false),
-		clientHandshakeData: &session.HandshakeData{
-			Sys: session.HandshakeClientData{
-				Platform:    "mac",
-				LibVersion:  "0.3.5-release",
-				BuildNumber: "20",
-				Version:     "2.1",
-			},
-			User: map[string]interface{}{
-				"age": 30,
-			},
-		},
+		messageEncoder: message.NewMessagesEncoder(true),
 	}
-}
-
-// SetClientHandshakeData sets the data to send inside handshake
-func (c *Client) SetClientHandshakeData(data *session.HandshakeData) {
-	c.clientHandshakeData = data
 }
 
 func (c *Client) sendHandshakeRequest() error {
-	enc, err := json.Marshal(c.clientHandshakeData)
+	p, err := c.packetEncoder.Encode(packet.Handshake, []byte(handshakeBuffer))
 	if err != nil {
 		return err
 	}
-
-	p, err := c.packetEncoder.Encode(packet.Handshake, enc)
-	if err != nil {
-		return err
-	}
-
 	_, err = c.conn.Write(p)
 	return err
 }
@@ -341,16 +328,12 @@ func (c *Client) Disconnect() {
 	}
 }
 
-// ConnectTo connects to the server at addr, for now the only supported protocol is tcp
-// if tlsConfig is sent, it connects using TLS
-func (c *Client) ConnectTo(addr string, tlsConfig ...*tls.Config) error {
-	var conn net.Conn
-	var err error
-	if len(tlsConfig) > 0 {
-		conn, err = tls.Dial("tcp", addr, tlsConfig[0])
-	} else {
-		conn, err = net.Dial("tcp", addr)
-	}
+// ConnectToTLS connects to the server at addr using TLS, for now the only supported protocol is tcp
+// this methods blocks as it also handles the messages from the server
+func (c *Client) ConnectToTLS(addr string, skipVerify bool) error {
+	conn, err := tls.Dial("tcp", addr, &tls.Config{
+		InsecureSkipVerify: skipVerify,
+	})
 	if err != nil {
 		return err
 	}
@@ -362,30 +345,17 @@ func (c *Client) ConnectTo(addr string, tlsConfig ...*tls.Config) error {
 	}
 
 	c.closeChan = make(chan struct{})
-
 	return nil
 }
 
-// ConnectToWS connects using webshocket protocol
-func (c *Client) ConnectToWS(addr string, path string, tlsConfig ...*tls.Config) error {
-	u := url.URL{Scheme: "ws", Host: addr, Path: path}
-	dialer := websocket.DefaultDialer
-
-	if len(tlsConfig) > 0 {
-		dialer.TLSClientConfig = tlsConfig[0]
-		u.Scheme = "wss"
-	}
-
-	conn, _, err := dialer.Dial(u.String(), nil)
+// ConnectTo connects to the server at addr, for now the only supported protocol is tcp
+// this methods blocks as it also handles the messages from the server
+func (c *Client) ConnectTo(addr string) error {
+	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return err
 	}
-
-	c.conn, err = acceptor.NewWSConn(conn)
-	if err != nil {
-		return err
-	}
-
+	c.conn = conn
 	c.IncomingMsgChan = make(chan *message.Message, 10)
 
 	if err = c.handleHandshake(); err != nil {

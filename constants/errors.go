@@ -82,7 +82,4 @@ var (
 	ErrTimeoutTerminatingBinaryModule = errors.New("timeout waiting to binary module to die")
 	ErrWrongValueType                 = errors.New("protobuf: convert on wrong type value")
 	ErrRateLimitExceeded              = errors.New("rate limit exceeded")
-	ErrReceivedMsgSmallerThanExpected = errors.New("received less data than expected, EOF?")
-	ErrReceivedMsgBiggerThanExpected  = errors.New("received more data than expected")
-	ErrConnectionClosed               = errors.New("client connection closed")
 )

@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	clientv3 "go.etcd.io/etcd/client/v3"
-	"go.etcd.io/etcd/tests/v3/integration"
-	"github.com/nats-io/nats-server/v2/server"
-	gnatsd "github.com/nats-io/nats-server/v2/test"
+	"github.com/coreos/etcd/clientv3"
+	"github.com/coreos/etcd/integration"
+	"github.com/nats-io/gnatsd/server"
+	gnatsd "github.com/nats-io/gnatsd/test"
 )
 
 // GetFreePort returns a free port
@@ -64,7 +64,6 @@ func GetTestNatsServer(t *testing.T) *server.Server {
 // GetTestEtcd gets a test in memory etcd server
 func GetTestEtcd(t *testing.T) (*integration.ClusterV3, *clientv3.Client) {
 	t.Helper()
-	integration.BeforeTest(t)
 	c := integration.NewClusterV3(t, &integration.ClusterConfig{Size: 1})
 	cli := c.RandClient()
 	return c, cli
@@ -106,14 +105,7 @@ func waitForServerToBeReady(t testing.TB, out *bufio.Reader) {
 }
 
 // StartServer starts a server
-func StartServer(
-	t testing.TB,
-	frontend, debug bool,
-	svType string,
-	port int,
-	sdPrefix string,
-	grpc, lazyConnection bool,
-) func() {
+func StartServer(t testing.TB, frontend bool, debug bool, svType string, port int, sdPrefix string, grpc bool) func() {
 	grpcPort := GetFreePort(t)
 	promPort := GetFreePort(t)
 	var useGRPC string
@@ -141,12 +133,8 @@ func StartServer(
 		"../examples/testing/server",
 		args...,
 	)
-
-	// always use a random port for prometheus, to avoid e2e conflicts
-	cmd.Env = []string{
-		fmt.Sprintf("PITAYA_METRICS_PROMETHEUS_PORT=%d", promPort),
-		fmt.Sprintf("PITAYA_CLUSTER_RPC_CLIENT_GRPC_LAZYCONNECTION=%v", lazyConnection),
-	}
+	// always use a random port for prometheus, for avoiding e2e conflicts
+	cmd.Env = []string{fmt.Sprintf("PITAYA_METRICS_PROMETHEUS_PORT=%d", promPort)}
 
 	outPipe, err := cmd.StderrPipe()
 	if err != nil {
@@ -159,6 +147,7 @@ func StartServer(
 	}
 
 	waitForServerToBeReady(t, bufio.NewReader(outPipe))
+
 	return func() {
 		err := cmd.Process.Kill()
 		if err != nil {

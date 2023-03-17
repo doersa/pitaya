@@ -4,9 +4,9 @@ import (
 	"context"
 
 	"github.com/golang/protobuf/proto"
-	"github.com/topfreegames/pitaya/v2"
-	"github.com/topfreegames/pitaya/v2/component"
-	"github.com/topfreegames/pitaya/v2/examples/demo/worker/protos"
+	"github.com/topfreegames/pitaya"
+	"github.com/topfreegames/pitaya/component"
+	"github.com/topfreegames/pitaya/examples/demo/worker/protos"
 )
 
 // Worker server
@@ -15,15 +15,18 @@ type Worker struct {
 }
 
 // Configure starts workers and register rpc job
-func (w *Worker) Configure(app pitaya.Pitaya) {
-	app.StartWorker()
-	app.RegisterRPCJob(&RPCJob{app: app})
+func (w *Worker) Configure() error {
+	err := pitaya.StartWorker(pitaya.GetConfig())
+	if err != nil {
+		return err
+	}
+
+	pitaya.RegisterRPCJob(&RPCJob{})
+	return nil
 }
 
 // RPCJob implements worker.RPCJob
-type RPCJob struct {
-	app pitaya.Pitaya
-}
+type RPCJob struct{}
 
 // ServerDiscovery returns a serverID="", meaning any server
 // is ok
@@ -40,7 +43,7 @@ func (r *RPCJob) RPC(
 	serverID, routeStr string,
 	reply, arg proto.Message,
 ) error {
-	return r.app.RPCTo(ctx, serverID, routeStr, reply, arg)
+	return pitaya.RPCTo(ctx, serverID, routeStr, reply, arg)
 }
 
 // GetArgReply returns reply and arg of LogRemote,

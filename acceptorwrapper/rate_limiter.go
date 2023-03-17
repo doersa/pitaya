@@ -22,12 +22,13 @@ package acceptorwrapper
 
 import (
 	"container/list"
+	"net"
 	"time"
 
-	"github.com/topfreegames/pitaya/v2/acceptor"
-	"github.com/topfreegames/pitaya/v2/constants"
-	"github.com/topfreegames/pitaya/v2/logger"
-	"github.com/topfreegames/pitaya/v2/metrics"
+	"github.com/topfreegames/pitaya"
+	"github.com/topfreegames/pitaya/constants"
+	"github.com/topfreegames/pitaya/logger"
+	"github.com/topfreegames/pitaya/metrics"
 )
 
 // RateLimiter wraps net.Conn by applying rate limiting and return empty
@@ -40,8 +41,7 @@ import (
 // On the client side, this will yield a timeout error and the client must
 // be prepared to handle it.
 type RateLimiter struct {
-	acceptor.PlayerConn
-	reporters    []metrics.Reporter
+	net.Conn
 	limit        int
 	interval     time.Duration
 	times        list.List
@@ -50,15 +50,13 @@ type RateLimiter struct {
 
 // NewRateLimiter returns an initialized *RateLimiting
 func NewRateLimiter(
-	reporters []metrics.Reporter,
-	conn acceptor.PlayerConn,
+	conn net.Conn,
 	limit int,
 	interval time.Duration,
 	forceDisable bool,
 ) *RateLimiter {
 	r := &RateLimiter{
-		PlayerConn:   conn,
-		reporters:    reporters,
+		Conn:         conn,
 		limit:        limit,
 		interval:     interval,
 		forceDisable: forceDisable,
@@ -69,26 +67,25 @@ func NewRateLimiter(
 	return r
 }
 
-// GetNextMessage gets the next message in the connection
-func (r *RateLimiter) GetNextMessage() (msg []byte, err error) {
+func (r *RateLimiter) Read(b []byte) (n int, err error) {
 	if r.forceDisable {
-		return r.PlayerConn.GetNextMessage()
+		return r.Conn.Read(b)
 	}
 
 	for {
-		msg, err := r.PlayerConn.GetNextMessage()
+		n, err = r.Conn.Read(b)
 		if err != nil {
-			return nil, err
+			return n, err
 		}
 
 		now := time.Now()
 		if r.shouldRateLimit(now) {
-			logger.Log.Errorf("Data=%s, Error=%s", msg, constants.ErrRateLimitExceeded)
-			metrics.ReportExceededRateLimiting(r.reporters)
+			logger.Log.Errorf("Data=%s, Error=%s", b, constants.ErrRateLimitExceeded)
+			metrics.ReportExceededRateLimiting(pitaya.GetMetricsReporters())
 			continue
 		}
 
-		return msg, err
+		return n, err
 	}
 }
 

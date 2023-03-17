@@ -21,9 +21,10 @@
 package acceptorwrapper
 
 import (
-	"github.com/topfreegames/pitaya/v2/acceptor"
-	"github.com/topfreegames/pitaya/v2/config"
-	"github.com/topfreegames/pitaya/v2/metrics"
+	"net"
+
+	"github.com/topfreegames/pitaya/acceptor"
+	"github.com/topfreegames/pitaya/config"
 )
 
 // RateLimitingWrapper rate limits for each connection
@@ -33,11 +34,17 @@ type RateLimitingWrapper struct {
 }
 
 // NewRateLimitingWrapper returns an instance of *RateLimitingWrapper
-func NewRateLimitingWrapper(reporters []metrics.Reporter, c config.RateLimitingConfig) *RateLimitingWrapper {
+func NewRateLimitingWrapper(c *config.Config) *RateLimitingWrapper {
 	r := &RateLimitingWrapper{}
 
-	r.BaseWrapper = NewBaseWrapper(func(conn acceptor.PlayerConn) acceptor.PlayerConn {
-		return NewRateLimiter(reporters, conn, c.Limit, c.Interval, c.ForceDisable)
+	r.BaseWrapper = NewBaseWrapper(func(conn net.Conn) net.Conn {
+		var (
+			limit        = c.GetInt("pitaya.conn.ratelimiting.limit")
+			interval     = c.GetDuration("pitaya.conn.ratelimiting.interval")
+			forceDisable = c.GetBool("pitaya.conn.ratelimiting.forcedisable")
+		)
+
+		return NewRateLimiter(conn, limit, interval, forceDisable)
 	})
 
 	return r

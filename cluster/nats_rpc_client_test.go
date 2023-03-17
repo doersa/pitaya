@@ -30,18 +30,18 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/golang/protobuf/proto"
 	"github.com/google/uuid"
-	nats "github.com/nats-io/nats.go"
+	nats "github.com/nats-io/go-nats"
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
-	"github.com/topfreegames/pitaya/v2/config"
-	"github.com/topfreegames/pitaya/v2/conn/message"
-	"github.com/topfreegames/pitaya/v2/constants"
-	e "github.com/topfreegames/pitaya/v2/errors"
-	"github.com/topfreegames/pitaya/v2/helpers"
-	"github.com/topfreegames/pitaya/v2/metrics"
-	metricsmocks "github.com/topfreegames/pitaya/v2/metrics/mocks"
-	"github.com/topfreegames/pitaya/v2/protos"
-	"github.com/topfreegames/pitaya/v2/route"
-	sessionmocks "github.com/topfreegames/pitaya/v2/session/mocks"
+	"github.com/topfreegames/pitaya/conn/message"
+	"github.com/topfreegames/pitaya/constants"
+	e "github.com/topfreegames/pitaya/errors"
+	"github.com/topfreegames/pitaya/helpers"
+	"github.com/topfreegames/pitaya/metrics"
+	metricsmocks "github.com/topfreegames/pitaya/metrics/mocks"
+	"github.com/topfreegames/pitaya/protos"
+	"github.com/topfreegames/pitaya/route"
+	"github.com/topfreegames/pitaya/session"
 )
 
 func TestNewNatsRPCClient(t *testing.T) {
@@ -51,12 +51,13 @@ func TestNewNatsRPCClient(t *testing.T) {
 	mockMetricsReporter := metricsmocks.NewMockReporter(ctrl)
 	mockMetricsReporters := []metrics.Reporter{mockMetricsReporter}
 
-	cfg := config.NewDefaultNatsRPCClientConfig()
+	cfg := getConfig()
 	sv := getServer()
-	n, err := NewNatsRPCClient(*cfg, sv, mockMetricsReporters, nil)
+	n, err := NewNatsRPCClient(cfg, sv, mockMetricsReporters, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, n)
 	assert.Equal(t, sv, n.server)
+	assert.Equal(t, cfg, n.config)
 	assert.Equal(t, mockMetricsReporters, n.metricsReporters)
 	assert.False(t, n.running)
 }
@@ -65,20 +66,21 @@ func TestNatsRPCClientConfigure(t *testing.T) {
 	t.Parallel()
 	tables := []struct {
 		natsConnect string
-		reqTimeout  time.Duration
+		reqTimeout  string
 		err         error
 	}{
-		{"nats://localhost:2333", time.Duration(10 * time.Second), nil},
-		{"nats://localhost:2333", time.Duration(0), constants.ErrNatsNoRequestTimeout},
-		{"", time.Duration(10 * time.Second), constants.ErrNoNatsConnectionString},
+		{"nats://localhost:2333", "10s", nil},
+		{"nats://localhost:2333", "0", constants.ErrNatsNoRequestTimeout},
+		{"", "10s", constants.ErrNoNatsConnectionString},
 	}
 
 	for _, table := range tables {
 		t.Run(fmt.Sprintf("%s-%s", table.natsConnect, table.reqTimeout), func(t *testing.T) {
-			cfg := config.NewDefaultNatsRPCClientConfig()
-			cfg.Connect = table.natsConnect
-			cfg.RequestTimeout = table.reqTimeout
-			_, err := NewNatsRPCClient(*cfg, getServer(), nil, nil)
+			cfg := viper.New()
+			cfg.Set("pitaya.cluster.rpc.client.nats.connect", table.natsConnect)
+			cfg.Set("pitaya.cluster.rpc.client.nats.requesttimeout", table.reqTimeout)
+			conf := getConfig(cfg)
+			_, err := NewNatsRPCClient(conf, getServer(), nil, nil)
 			assert.Equal(t, table.err, err)
 		})
 	}
@@ -86,17 +88,17 @@ func TestNatsRPCClientConfigure(t *testing.T) {
 
 func TestNatsRPCClientGetSubscribeChannel(t *testing.T) {
 	t.Parallel()
-	cfg := config.NewDefaultNatsRPCClientConfig()
+	cfg := getConfig()
 	sv := getServer()
-	n, _ := NewNatsRPCClient(*cfg, sv, nil, nil)
+	n, _ := NewNatsRPCClient(cfg, sv, nil, nil)
 	assert.Equal(t, fmt.Sprintf("pitaya/servers/%s/%s", n.server.Type, n.server.ID), n.getSubscribeChannel())
 }
 
 func TestNatsRPCClientStop(t *testing.T) {
 	t.Parallel()
-	cfg := config.NewDefaultNatsRPCClientConfig()
+	cfg := getConfig()
 	sv := getServer()
-	n, _ := NewNatsRPCClient(*cfg, sv, nil, nil)
+	n, _ := NewNatsRPCClient(cfg, sv, nil, nil)
 	// change it to true to ensure it goes to false
 	n.running = true
 	n.stop()
@@ -106,9 +108,10 @@ func TestNatsRPCClientStop(t *testing.T) {
 func TestNatsRPCClientInitShouldFailIfConnFails(t *testing.T) {
 	t.Parallel()
 	sv := getServer()
-	cfg := config.NewDefaultNatsRPCClientConfig()
-	cfg.Connect = "nats://localhost:1"
-	rpcClient, _ := NewNatsRPCClient(*cfg, sv, nil, nil)
+	cfg := viper.New()
+	cfg.Set("pitaya.cluster.rpc.client.nats.connect", "nats://localhost:1")
+	config := getConfig(cfg)
+	rpcClient, _ := NewNatsRPCClient(config, sv, nil, nil)
 	err := rpcClient.Init()
 	assert.Error(t, err)
 }
@@ -116,11 +119,12 @@ func TestNatsRPCClientInitShouldFailIfConnFails(t *testing.T) {
 func TestNatsRPCClientInit(t *testing.T) {
 	s := helpers.GetTestNatsServer(t)
 	defer s.Shutdown()
-	cfg := config.NewDefaultNatsRPCClientConfig()
-	cfg.Connect = fmt.Sprintf("nats://%s", s.Addr())
+	cfg := viper.New()
+	cfg.Set("pitaya.cluster.rpc.client.nats.connect", fmt.Sprintf("nats://%s", s.Addr()))
+	config := getConfig(cfg)
 	sv := getServer()
 
-	rpcClient, _ := NewNatsRPCClient(*cfg, sv, nil, nil)
+	rpcClient, _ := NewNatsRPCClient(config, sv, nil, nil)
 	err := rpcClient.Init()
 	assert.NoError(t, err)
 	assert.True(t, rpcClient.running)
@@ -134,11 +138,12 @@ func TestNatsRPCClientBroadcastSessionBind(t *testing.T) {
 	uid := "testuid123"
 	s := helpers.GetTestNatsServer(t)
 	defer s.Shutdown()
-	cfg := config.NewDefaultNatsRPCClientConfig()
-	cfg.Connect = fmt.Sprintf("nats://%s", s.Addr())
+	cfg := viper.New()
+	cfg.Set("pitaya.cluster.rpc.client.nats.connect", fmt.Sprintf("nats://%s", s.Addr()))
+	config := getConfig(cfg)
 	sv := getServer()
 
-	rpcClient, _ := NewNatsRPCClient(*cfg, sv, nil, nil)
+	rpcClient, _ := NewNatsRPCClient(config, sv, nil, nil)
 	rpcClient.Init()
 
 	subChan := make(chan *nats.Msg)
@@ -166,11 +171,12 @@ func TestNatsRPCClientSendKick(t *testing.T) {
 	uid := "testuid"
 	s := helpers.GetTestNatsServer(t)
 	defer s.Shutdown()
-	cfg := config.NewDefaultNatsRPCClientConfig()
-	cfg.Connect = fmt.Sprintf("nats://%s", s.Addr())
+	cfg := viper.New()
+	cfg.Set("pitaya.cluster.rpc.client.nats.connect", fmt.Sprintf("nats://%s", s.Addr()))
+	config := getConfig(cfg)
 	sv := getServer()
 
-	rpcClient, _ := NewNatsRPCClient(*cfg, sv, nil, nil)
+	rpcClient, _ := NewNatsRPCClient(config, sv, nil, nil)
 	err := rpcClient.Init()
 	assert.NoError(t, err)
 
@@ -201,11 +207,12 @@ func TestNatsRPCClientSendPush(t *testing.T) {
 	uid := "testuid123"
 	s := helpers.GetTestNatsServer(t)
 	defer s.Shutdown()
-	cfg := config.NewDefaultNatsRPCClientConfig()
-	cfg.Connect = fmt.Sprintf("nats://%s", s.Addr())
+	cfg := viper.New()
+	cfg.Set("pitaya.cluster.rpc.client.nats.connect", fmt.Sprintf("nats://%s", s.Addr()))
+	config := getConfig(cfg)
 	sv := getServer()
 
-	rpcClient, _ := NewNatsRPCClient(*cfg, sv, nil, nil)
+	rpcClient, _ := NewNatsRPCClient(config, sv, nil, nil)
 	rpcClient.Init()
 
 	subChan := make(chan *nats.Msg)
@@ -238,9 +245,9 @@ func TestNatsRPCClientSendPush(t *testing.T) {
 }
 
 func TestNatsRPCClientSendShouldFailIfNotRunning(t *testing.T) {
-	config := config.NewDefaultNatsRPCClientConfig()
+	config := getConfig()
 	sv := getServer()
-	rpcClient, _ := NewNatsRPCClient(*config, sv, nil, nil)
+	rpcClient, _ := NewNatsRPCClient(config, sv, nil, nil)
 	err := rpcClient.Send("topic", []byte("data"))
 	assert.Equal(t, constants.ErrRPCClientNotInitialized, err)
 }
@@ -248,11 +255,12 @@ func TestNatsRPCClientSendShouldFailIfNotRunning(t *testing.T) {
 func TestNatsRPCClientSend(t *testing.T) {
 	s := helpers.GetTestNatsServer(t)
 	defer s.Shutdown()
-	cfg := config.NewDefaultNatsRPCClientConfig()
-	cfg.Connect = fmt.Sprintf("nats://%s", s.Addr())
+	cfg := viper.New()
+	cfg.Set("pitaya.cluster.rpc.client.nats.connect", fmt.Sprintf("nats://%s", s.Addr()))
+	config := getConfig(cfg)
 	sv := getServer()
 
-	rpcClient, _ := NewNatsRPCClient(*cfg, sv, nil, nil)
+	rpcClient, _ := NewNatsRPCClient(config, sv, nil, nil)
 	rpcClient.Init()
 
 	tables := []struct {
@@ -282,66 +290,64 @@ func TestNatsRPCClientSend(t *testing.T) {
 }
 
 func TestNatsRPCClientBuildRequest(t *testing.T) {
-	config := config.NewDefaultNatsRPCClientConfig()
+	config := getConfig()
 	sv := getServer()
-	rpcClient, _ := NewNatsRPCClient(*config, sv, nil, nil)
+	rpcClient, _ := NewNatsRPCClient(config, sv, nil, nil)
 
 	rt := route.NewRoute("sv", "svc", "method")
-
+	ss := session.New(nil, true, "uid")
 	data := []byte("data")
-	messageID := uint(123)
-	sessionID := int64(1)
-	uid := "uid"
-	data2 := []byte("data2")
+	id := uint(123)
 	tables := []struct {
 		name           string
 		frontendServer bool
 		rpcType        protos.RPCType
 		route          *route.Route
+		session        *session.Session
 		msg            *message.Message
 		expected       protos.Request
 	}{
 		{
-			"test-frontend-request", true, protos.RPCType_Sys, rt,
-			&message.Message{Type: message.Request, ID: messageID, Data: data},
+			"test-frontend-request", true, protos.RPCType_Sys, rt, ss,
+			&message.Message{Type: message.Request, ID: id, Data: data},
 			protos.Request{
 				Type: protos.RPCType_Sys,
 				Msg: &protos.Msg{
 					Route: rt.String(),
 					Data:  data,
 					Type:  protos.MsgType_MsgRequest,
-					Id:    uint64(messageID),
+					Id:    uint64(id),
 				},
 				FrontendID: sv.ID,
 				Session: &protos.Session{
-					Id:   sessionID,
-					Uid:  uid,
-					Data: data2,
+					Id:   ss.ID(),
+					Uid:  ss.UID(),
+					Data: ss.GetDataEncoded(),
 				},
 			},
 		},
 		{
-			"test-rpc-sys-request", false, protos.RPCType_Sys, rt,
-			&message.Message{Type: message.Request, ID: messageID, Data: data},
+			"test-rpc-sys-request", false, protos.RPCType_Sys, rt, ss,
+			&message.Message{Type: message.Request, ID: id, Data: data},
 			protos.Request{
 				Type: protos.RPCType_Sys,
 				Msg: &protos.Msg{
 					Route: rt.String(),
 					Data:  data,
 					Type:  protos.MsgType_MsgRequest,
-					Id:    uint64(messageID),
+					Id:    uint64(id),
 				},
 				FrontendID: "",
 				Session: &protos.Session{
-					Id:   sessionID,
-					Uid:  uid,
-					Data: data2,
+					Id:   ss.ID(),
+					Uid:  ss.UID(),
+					Data: ss.GetDataEncoded(),
 				},
 			},
 		},
 		{
-			"test-rpc-user-request", false, protos.RPCType_User, rt,
-			&message.Message{Type: message.Request, ID: messageID, Data: data},
+			"test-rpc-user-request", false, protos.RPCType_User, rt, ss,
+			&message.Message{Type: message.Request, ID: id, Data: data},
 			protos.Request{
 				Type: protos.RPCType_User,
 				Msg: &protos.Msg{
@@ -353,8 +359,8 @@ func TestNatsRPCClientBuildRequest(t *testing.T) {
 			},
 		},
 		{
-			"test-notify", false, protos.RPCType_Sys, rt,
-			&message.Message{Type: message.Notify, ID: messageID, Data: data},
+			"test-notify", false, protos.RPCType_Sys, rt, ss,
+			&message.Message{Type: message.Notify, ID: id, Data: data},
 			protos.Request{
 				Type: protos.RPCType_Sys,
 				Msg: &protos.Msg{
@@ -365,26 +371,17 @@ func TestNatsRPCClientBuildRequest(t *testing.T) {
 				},
 				FrontendID: "",
 				Session: &protos.Session{
-					Id:   sessionID,
-					Uid:  uid,
-					Data: data2,
+					Id:   ss.ID(),
+					Uid:  ss.UID(),
+					Data: ss.GetDataEncoded(),
 				},
 			},
 		},
 	}
 	for _, table := range tables {
 		t.Run(table.name, func(t *testing.T) {
-			ctrl := gomock.NewController(t)
-
-			ss := sessionmocks.NewMockSession(ctrl)
-                        if table.rpcType == protos.RPCType_Sys {
-				ss.EXPECT().ID().Return(sessionID).Times(1)
-				ss.EXPECT().UID().Return(uid).Times(1)
-				ss.EXPECT().GetDataEncoded().Return(data2).Times(1)
-			}
-
 			rpcClient.server.Frontend = table.frontendServer
-			req, err := buildRequest(context.Background(), table.rpcType, table.route, ss, table.msg, rpcClient.server)
+			req, err := buildRequest(context.Background(), table.rpcType, table.route, table.session, table.msg, rpcClient.server)
 			assert.NoError(t, err)
 			assert.NotNil(t, req.Metadata)
 			req.Metadata = nil
@@ -394,9 +391,9 @@ func TestNatsRPCClientBuildRequest(t *testing.T) {
 }
 
 func TestNatsRPCClientCallShouldFailIfNotRunning(t *testing.T) {
-	config := config.NewDefaultNatsRPCClientConfig()
+	config := getConfig()
 	sv := getServer()
-	rpcClient, _ := NewNatsRPCClient(*config, sv, nil, nil)
+	rpcClient, _ := NewNatsRPCClient(config, sv, nil, nil)
 	res, err := rpcClient.Call(context.Background(), protos.RPCType_Sys, nil, nil, nil, sv)
 	assert.Equal(t, constants.ErrRPCClientNotInitialized, err)
 	assert.Nil(t, res)
@@ -406,17 +403,15 @@ func TestNatsRPCClientCall(t *testing.T) {
 	s := helpers.GetTestNatsServer(t)
 	sv := getServer()
 	defer s.Shutdown()
-	cfg := config.NewDefaultNatsRPCClientConfig()
-	cfg.Connect = fmt.Sprintf("nats://%s", s.Addr())
-	cfg.RequestTimeout = time.Duration(300 * time.Millisecond)
-	rpcClient, _ := NewNatsRPCClient(*cfg, sv, nil, nil)
+	cfg := viper.New()
+	cfg.Set("pitaya.cluster.rpc.client.nats.connect", fmt.Sprintf("nats://%s", s.Addr()))
+	cfg.Set("pitaya.cluster.rpc.client.nats.requesttimeout", "300ms")
+	config := getConfig(cfg)
+	rpcClient, _ := NewNatsRPCClient(config, sv, nil, nil)
 	rpcClient.Init()
 
 	rt := route.NewRoute("sv", "svc", "method")
-
-	sessionID := int64(1)
-	uid := "uid"
-	data2 := []byte("data2")
+	ss := session.New(nil, true, "uid")
 
 	msg := &message.Message{
 		Type: message.Request,
@@ -432,14 +427,13 @@ func TestNatsRPCClientCall(t *testing.T) {
 	}{
 		{"test_error", &protos.Response{Data: []byte("nok"), Error: &protos.Error{Msg: "nok"}}, nil, e.NewError(errors.New("nok"), e.ErrUnknownCode)},
 		{"test_ok", &protos.Response{Data: []byte("ok")}, &protos.Response{Data: []byte("ok")}, nil},
-		{"test_bad_response", []byte("invalid"), nil, errors.New("cannot parse invalid wire-format data")},
-		{"test_bad_proto", &protos.Session{Id: 1, Uid: "snap"}, nil, errors.New("cannot parse invalid wire-format data")},
+		{"test_bad_response", []byte("invalid"), nil, errors.New("unexpected EOF")},
+		{"test_bad_proto", &protos.Session{Id: 1, Uid: "snap"}, nil, errors.New("unexpected EOF")},
 		{"test_no_response", nil, nil, errors.New("nats: timeout")},
 	}
 
 	for _, table := range tables {
 		t.Run(table.name, func(t *testing.T) {
-			ctrl := gomock.NewController(t)
 			conn, err := setupNatsConn(fmt.Sprintf("nats://%s", s.Addr()), nil)
 			assert.NoError(t, err)
 
@@ -462,19 +456,9 @@ func TestNatsRPCClientCall(t *testing.T) {
 			assert.NoError(t, err)
 			// TODO this is ugly, can lead to flaky tests and we could probably do it better
 			time.Sleep(50 * time.Millisecond)
-
-			ss := sessionmocks.NewMockSession(ctrl)
-			ss.EXPECT().ID().Return(sessionID).Times(1)
-			ss.EXPECT().UID().Return(uid).Times(1)
-			ss.EXPECT().GetDataEncoded().Return(data2).Times(1)
-			ss.EXPECT().SetRequestInFlight(gomock.Any(),gomock.Any(),gomock.Any()).Times(2)
-
 			res, err := rpcClient.Call(context.Background(), protos.RPCType_Sys, rt, ss, msg, sv2)
 			assert.Equal(t, table.expected, res)
-			if table.err != nil {
-				assert.Error(t, err)
-				assert.Contains(t, err.Error(), table.err.Error())
-			}
+			assert.Equal(t, table.err, err)
 			err = subs.Unsubscribe()
 			assert.NoError(t, err)
 			conn.Close()

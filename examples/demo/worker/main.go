@@ -7,18 +7,37 @@ import (
 	"strings"
 
 	"github.com/spf13/viper"
-	"github.com/topfreegames/pitaya/v2"
-	"github.com/topfreegames/pitaya/v2/acceptor"
-	"github.com/topfreegames/pitaya/v2/component"
-	"github.com/topfreegames/pitaya/v2/config"
-	"github.com/topfreegames/pitaya/v2/examples/demo/worker/services"
+	"github.com/topfreegames/pitaya"
+	"github.com/topfreegames/pitaya/acceptor"
+	"github.com/topfreegames/pitaya/component"
+	"github.com/topfreegames/pitaya/examples/demo/worker/services"
+	"github.com/topfreegames/pitaya/serialize/json"
 )
 
-var app pitaya.Pitaya
+func configureMetagame() {
+	pitaya.RegisterRemote(&services.Metagame{},
+		component.WithName("metagame"),
+		component.WithNameFunc(strings.ToLower),
+	)
+}
 
-func configureWorker() {
+func configureRoom(port int) error {
+	tcp := acceptor.NewTCPAcceptor(fmt.Sprintf(":%d", port))
+	pitaya.AddAcceptor(tcp)
+
+	pitaya.Register(&services.Room{},
+		component.WithName("room"),
+		component.WithNameFunc(strings.ToLower),
+	)
+
+	err := pitaya.StartWorker(pitaya.GetConfig())
+	return err
+}
+
+func configureWorker() error {
 	worker := services.Worker{}
-	worker.Configure(app)
+	err := worker.Configure()
+	return err
 }
 
 func main() {
@@ -28,38 +47,29 @@ func main() {
 
 	flag.Parse()
 
-	conf := viper.New()
-	conf.SetDefault("pitaya.worker.redis.url", "localhost:6379")
-	conf.SetDefault("pitaya.worker.redis.pool", "3")
+	defer pitaya.Shutdown()
 
-	config := config.NewConfig(conf)
+	pitaya.SetSerializer(json.NewSerializer())
 
-	tcp := acceptor.NewTCPAcceptor(fmt.Sprintf(":%d", *port))
+	config := viper.New()
+	config.SetDefault("pitaya.worker.redis.url", "localhost:6379")
+	config.SetDefault("pitaya.worker.redis.pool", "3")
 
-	builder := pitaya.NewBuilderWithConfigs(*isFrontend, *svType, pitaya.Cluster, map[string]string{}, config)
-	if *isFrontend {
-		builder.AddAcceptor(tcp)
-	}
-	app = builder.Build()
+	pitaya.Configure(*isFrontend, *svType, pitaya.Cluster, map[string]string{})
 
-	defer app.Shutdown()
-
-	defer app.Shutdown()
-
+	var err error
 	switch *svType {
 	case "metagame":
-		app.RegisterRemote(&services.Metagame{},
-			component.WithName("metagame"),
-			component.WithNameFunc(strings.ToLower),
-		)
+		configureMetagame()
 	case "room":
-		app.Register(services.NewRoom(app),
-			component.WithName("room"),
-			component.WithNameFunc(strings.ToLower),
-		)
+		err = configureRoom(*port)
 	case "worker":
-		configureWorker()
+		err = configureWorker()
 	}
 
-	app.Start()
+	if err != nil {
+		panic(err)
+	}
+
+	pitaya.Start()
 }
